@@ -6,6 +6,7 @@ using PristonTale.Simulation.Items;
 using PristonTale.Simulation.Progression;
 using PristonTale.Simulation.Skills;
 using PristonTale.Contracts.Characters;
+using PristonTale.Contracts.Texts;
 using PristonTale.Gameplay.Localization;
 
 namespace PristonTale.Gameplay.UI.Widgets;
@@ -135,7 +136,7 @@ public sealed class HudSkillsPanel(SpriteFont font, HudSprites sprites)
         return 0;
     }
 
-    public void HandleTrainingClick(Point origin, Point pointer, OwnerState state, ulong npcId, HudProgressionController controller)
+    public void HandleTrainingClick(Point origin, Point pointer, OwnerState state, ulong npcId, HudProgressionController controller, Action<string> showNotice = null)
     {
         if (state is null || npcId == 0 || controller.Pending)
         {
@@ -167,6 +168,15 @@ public sealed class HudSkillsPanel(SpriteFont font, HudSprites sprites)
             var rank = Rank(state, entry.Skill.Code);
             if (!CanTrain(index, state))
             {
+                // The client must explain the price gate rather than silently ignoring a valid training click.
+                // Keep every other gate (level, prerequisite, tier and points) unchanged.
+                var skills = Classes.Get(_class).Skills;
+                if (SkillLearning.CanTrain(skills, index, code => Rank(state, code), state.Level, state.Tier,
+                        state.SkillPoints, state.EliteSkillPoints)
+                    && state.Money < SkillLearning.Price(index, rank, Tax))
+                {
+                    showNotice?.Invoke(ClientText.Get(GameTextId.NotEnoughGold));
+                }
                 return;
             }
 
