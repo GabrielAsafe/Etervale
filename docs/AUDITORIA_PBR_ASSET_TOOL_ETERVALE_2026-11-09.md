@@ -1,8 +1,12 @@
 # Auditoria técnica — Pipeline de modernização gráfica PT Asset Tool + Etervale + Blender
 
-**Data:** 09/11/2026  
-**Escopo:** código disponibilizado de `Etervale-main(2).zip` e versão do Asset Tool com patches P0/P1 em `/mnt/data/native_content_work/asset`, logs reais de validação enviados na conversa e requisitos do documento `Projeto: Pipeline de Modernização Gráfica — Priston Tale + Blender`.  
+**Data:** 09/11/2026
+
+**Escopo:** cópia de código do Etervale (`Etervale-main(2).zip`), cópia de trabalho do PT Asset Tool com patches P0/P1, logs reais de validação fornecidos durante a auditoria e requisitos do documento `Projeto: Pipeline de Modernização Gráfica — Priston Tale + Blender`.
+
 **Tipo de prova:** inspeção estática de código + smoke test Python offline + testes unitários de processamento de texturas. **Não é prova de GPU, qualidade visual nem desempenho no jogo.**
+
+**Proveniência:** `Etervale-main(2).zip` foi o arquivo de referência disponível durante aquela auditoria (sem a pasta `assets/`). O caminho `/mnt/data/native_content_work/asset` identificado no relatório original era uma cópia **temporária do PT Asset Tool no ambiente de análise**, não um diretório do repositório Etervale nem da instalação Fedora. Resultados descritos como obtidos "neste ambiente" pertencem à sessão de auditoria de 09/11/2026, não a uma validação posterior da branch publicada.
 
 ## Síntese
 
@@ -114,6 +118,8 @@ Esta abordagem **não modifica o leitor de SMD/SMB/INX** nem importa os 11 packs
 - Gate: um objeto real em jogo com sidecar de roughness/metallic/normal, descarte/fallback sem crash e desempenho aceitável.
 
 ## Comando recomendado para obter inventário real na máquina do usuário
+
+O script `etervale_graphics_audit_readonly.py` foi fornecido separadamente para a auditoria e **não integra esta branch do Etervale**. O comando seguinte pressupõe que o script foi guardado em `~/Transferências/`; não é uma funcionalidade instalada automaticamente com o jogo.
 
 Instalar o script fornecido em `~/Transferências/` e executar:
 
