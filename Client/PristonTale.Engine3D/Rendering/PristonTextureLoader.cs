@@ -15,6 +15,11 @@ public sealed class PristonTextureLoader : IDisposable
     private readonly SurfaceFormat _format;
     private readonly ConcurrentDictionary<string, Texture2D> _cache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Lazy<Task<PreparedTexture>>> _preparing = new(StringComparer.OrdinalIgnoreCase);
+    // Optional, explicit directory-scoped source fallback. Set up before loading scene textures.
+    // Never search the whole assets tree by basename: unrelated stages reuse filenames.
+    private readonly ConcurrentDictionary<string, string> _fallbackDirectories = new(StringComparer.OrdinalIgnoreCase);
+    // Per-texture override for shared directories: an opening NPC must not redirect other NPC materials.
+    private readonly ConcurrentDictionary<string, string> _namedFallbackDirectories = new(StringComparer.OrdinalIgnoreCase);
     private static readonly SemaphoreSlim DecodeSlots = new(2, 2);
     // The classic alpha-test reference value.
     internal const byte AlphaCutoffByte = 60;
@@ -32,6 +37,16 @@ public sealed class PristonTextureLoader : IDisposable
 
     public Texture2D White => _white;
     public bool RequirePreparedTextures { get; set; }
+
+    public void SetFallbackDirectory(string sourceDirectory, string fallbackDirectory)
+    {
+        _fallbackDirectories[Path.GetFullPath(sourceDirectory)] = Path.GetFullPath(fallbackDirectory);
+    }
+
+    public void SetFallbackTextureDirectory(string sourceDirectory, string textureName, string fallbackDirectory)
+    {
+        _namedFallbackDirectories[CacheKey(sourceDirectory, textureName, string.Empty)] = Path.GetFullPath(fallbackDirectory);
+    }
 
     public void Initialize()
     {
@@ -260,7 +275,7 @@ public sealed class PristonTextureLoader : IDisposable
 
     private PreparedTexture PrepareUi(string directory, string name, PristonUiColorKey colorKey)
     {
-        var path = ResolvePath(directory, name);
+        var path = ResolveTexturePath(directory, name);
         if (path.Length == 0)
         {
             _log.Warn($"UI texture '{name}' in '{directory}' is missing; using shared white fallback.");
@@ -280,7 +295,7 @@ public sealed class PristonTextureLoader : IDisposable
 
     private PreparedTexture Prepare(string directory, string name, string opacity)
     {
-        var path = ResolvePath(directory, name);
+        var path = ResolveTexturePath(directory, name);
         if (path.Length == 0)
         {
             _log.Warn($"Texture '{name}' in '{directory}' is missing; using shared white fallback.");
@@ -296,7 +311,7 @@ public sealed class PristonTextureLoader : IDisposable
 
         if (!image.HasSourceAlpha && !string.IsNullOrWhiteSpace(opacity))
         {
-            var alphaPath = ResolvePath(directory, opacity);
+            var alphaPath = ResolveTexturePath(directory, opacity);
             var mask = alphaPath.Length > 0 && !string.Equals(path, alphaPath, StringComparison.OrdinalIgnoreCase) ? ReadImage(alphaPath) : null;
             if (mask is { IsValid: true } && PristonOpacityMask.Applies(path, alphaPath, image.Width, image.Height, mask.Width, mask.Height))
             {
@@ -322,6 +337,29 @@ public sealed class PristonTextureLoader : IDisposable
     private static string CacheKey(string directory, string name, string opacity)
     {
         return Path.GetFullPath(directory).Replace('\\', '/') + "|" + name.Replace('\\', '/') + "|" + opacity.Replace('\\', '/');
+    }
+
+    internal string ResolveTexturePath(string directory, string name)
+    {
+        if (!_namedFallbackDirectories.TryGetValue(CacheKey(directory, name, string.Empty), out var fallbackDirectory))
+        {
+            _fallbackDirectories.TryGetValue(Path.GetFullPath(directory), out fallbackDirectory);
+        }
+
+        return ResolvePathWithFallback(directory, name, fallbackDirectory);
+    }
+
+    // The source model's folder always wins. Only the configured directory is tried next;
+    // never choose among unrelated same-named textures in other fields.
+    internal static string ResolvePathWithFallback(string directory, string name, string fallbackDirectory)
+    {
+        var found = ResolvePath(directory, name);
+        if (found.Length > 0 || string.IsNullOrWhiteSpace(fallbackDirectory))
+        {
+            return found;
+        }
+
+        return ResolvePath(fallbackDirectory, name);
     }
 
     // A texture a model names with another extension than the one shipped is looked for under these, in its own folder.
