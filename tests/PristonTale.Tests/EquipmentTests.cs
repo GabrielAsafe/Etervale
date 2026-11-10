@@ -48,8 +48,12 @@ internal static class EquipmentTests
             EquipmentVisuals.SetCostumeCatalog(catalog);
             Assert.True(catalog.TryBody("da147", 0, out var model) && model == "char/tmABCD/Ca001.inx"
                 && !catalog.TryBody("DA148", 0, out _), "costume class mapping or case folding failed");
-            Assert.True(EquipmentVisuals.Apply(defaults, "DA147", "", "", false, 2).Body.InxExtensionPath == model,
-                "optional visual mapping did not change the selected body");
+            Assert.True(EquipmentVisuals.Apply(defaults, "DA147", "", "", false, 2).Body.InxExtensionPath == original,
+                "ordinary armor changed body merely because the costume catalog contains its item code");
+            Assert.True(EquipmentVisuals.Apply(defaults, "DA147", "", "", false, 2, "DA147").Body.InxExtensionPath == model,
+                "an explicitly worn costume failed to override the character body");
+            Assert.True(EquipmentVisuals.Apply(defaults, "DA108", "", "", false, 2, "DA147").Body.InxExtensionPath == model,
+                "an explicitly worn costume failed to override a different armor body");
             File.WriteAllText(manifest, "{\"version\":1,\"costumes\":[{\"itemKey\":\"CA101\",\"bodies\":{\"0\":\"char/tmABCD/Ca001.inx\"}}]}");
             Assert.True(ReferenceEquals(CostumeVisualCatalog.Load(root, log), CostumeVisualCatalog.Empty),
                 "deferred CA costumes were activated");

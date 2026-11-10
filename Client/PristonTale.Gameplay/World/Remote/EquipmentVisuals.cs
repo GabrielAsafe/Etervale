@@ -72,10 +72,6 @@ public static class EquipmentVisuals
         {
             body = wornBody;
         }
-        else if (_costumeCatalog.TryBody(armor, defaults.ArmorTableIndex, out var costumeBody))
-        {
-            body = costumeBody;
-        }
         else if (!string.IsNullOrEmpty(armor) && !armor.StartsWith("CA", StringComparison.OrdinalIgnoreCase)
             && EquipmentVisualTables.ArmorSlots.TryGetValue(armor, out var index))
         {
