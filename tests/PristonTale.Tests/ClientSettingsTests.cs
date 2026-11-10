@@ -49,6 +49,11 @@ internal static class ClientSettingsTests
         settings = new ClientSettings { WindowWidth = 3440, WindowHeight = 1440, RefreshRate = 165, MaxFps = 237, Monitor = 2 };
         Assert.True(settings.Validate(NullClientLog.Instance) == settings, "valid custom mode or frame limit was lost");
         Assert.True(settings.HasSameDisplay(settings with { MaxFps = 60, UiScale = 1.2f, MusicEnabled = false, SoundEnabled = false }), "non-device settings triggered display reset");
+        Assert.True(new ClientSettings().CameraSceneryCollision, "camera collision should default on");
+        Assert.True((settings with { CameraSceneryCollision = false }).Validate(NullClientLog.Instance).CameraSceneryCollision == false,
+            "camera collision option was not persisted by validation");
+        Assert.True(settings.HasSameDisplay(settings with { CameraSceneryCollision = false }),
+            "camera-only option triggered a display reset");
         Assert.True(!settings.HasSameDisplay(settings with { RefreshRate = 144 }), "refresh change missed display reset");
         return Task.CompletedTask;
     }

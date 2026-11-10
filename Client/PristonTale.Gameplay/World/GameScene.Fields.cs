@@ -229,7 +229,23 @@ public sealed partial class GameScene
 
             if (!keep)
             {
-                _log.Info($"[Stream] unload {field.Definition.Id} (walked away from {active.Id}).");
+                // Diagnostic only: show which retention boundary caused this unload.
+                var seamDistance = TryGateSeam(active, field.Definition, out var traceSeam)
+                    ? Vector2.Distance(player, traceSeam) : -1f;
+                var nearestWarpDistance = float.MaxValue;
+                foreach (var warp in active.WarpGates)
+                {
+                    if (warp.DestinationFieldId == field.Definition.Id)
+                    {
+                        nearestWarpDistance = MathF.Min(nearestWarpDistance,
+                            Vector2.Distance(player, WorldSpace.Planar(warp.X, warp.Z)));
+                    }
+                }
+
+                _log.Info($"[Stream] unload {field.Definition.Id} (walked away from {active.Id}); " +
+                    $"position=({player.X:F0},{player.Y:F0}), seam={seamDistance:F0}, " +
+                    $"warp={(nearestWarpDistance == float.MaxValue ? -1f : nearestWarpDistance):F0}, " +
+                    $"retention={disconnect:F0}, moving={_hasMoveTarget}.");
                 UnloadField(field);
             }
         }
