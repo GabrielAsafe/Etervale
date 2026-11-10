@@ -21,11 +21,52 @@ internal static class EquipmentTests
     {
         yield return ("original catalog metadata enables armor and weapons without allowing two-handed shield combinations", CatalogMetadataAsync);
         yield return ("equipment resources preserve original indices, armor aliases and village bones", ResourcesAsync);
+        yield return ("optional costume body mappings reject deferred codes and unsafe paths", CostumeCatalogAsync);
         yield return ("the assassin holds a dagger in each hand and the shaman's phantom hovers at its back", NewClassWeaponsAsync);
         yield return ("an item key's family names its kind without allocating", KindOfAsync);
         yield return ("motion selection respects item lists, class and map masks", MotionAsync);
         yield return ("equipment changes refresh public appearance over TCP", PresenceAsync);
         yield return ("remote equipment preparation preserves old actors and discards superseded swaps", ReplacementAsync);
+    }
+
+    private static Task CostumeCatalogAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "etervale-costumes-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "summit"));
+            Directory.CreateDirectory(Path.Combine(root, "char", "tmABCD"));
+            File.WriteAllBytes(Path.Combine(root, "char", "tmABCD", "Ca001.inx"), []);
+            var manifest = Path.Combine(root, "summit", "costumes.json");
+            var defaults = new CharacterClassRegistry().Get(PlayerClass.Mechanician).Definition.DefaultVisuals;
+            var original = EquipmentVisuals.Apply(defaults, "DA147", "", "", false, 2).Body.InxExtensionPath;
+            var log = PristonTale.Engine3D.Diagnostics.NullClientLog.Instance;
+            Assert.True(ReferenceEquals(CostumeVisualCatalog.Load(root, log), CostumeVisualCatalog.Empty),
+                "an absent optional costume manifest changed visuals");
+            File.WriteAllText(manifest, "{\"version\":1,\"costumes\":[{\"itemKey\":\"DA147\",\"bodies\":{\"0\":\"char/tmABCD/Ca001.inx\"}}]}");
+            var catalog = CostumeVisualCatalog.Load(root, log);
+            EquipmentVisuals.SetCostumeCatalog(catalog);
+            Assert.True(catalog.TryBody("da147", 0, out var model) && model == "char/tmABCD/Ca001.inx"
+                && !catalog.TryBody("DA148", 0, out _), "costume class mapping or case folding failed");
+            Assert.True(EquipmentVisuals.Apply(defaults, "DA147", "", "", false, 2).Body.InxExtensionPath == model,
+                "optional visual mapping did not change the selected body");
+            File.WriteAllText(manifest, "{\"version\":1,\"costumes\":[{\"itemKey\":\"CA101\",\"bodies\":{\"0\":\"char/tmABCD/Ca001.inx\"}}]}");
+            Assert.True(ReferenceEquals(CostumeVisualCatalog.Load(root, log), CostumeVisualCatalog.Empty),
+                "deferred CA costumes were activated");
+            File.WriteAllText(manifest, "{\"version\":1,\"costumes\":[{\"itemKey\":\"DA147\",\"bodies\":{\"0\":\"../char/tmABCD/Ca001.inx\"}}]}");
+            Assert.True(ReferenceEquals(CostumeVisualCatalog.Load(root, log), CostumeVisualCatalog.Empty),
+                "a path leaving the asset root was accepted");
+            EquipmentVisuals.SetCostumeCatalog(CostumeVisualCatalog.Empty);
+            Assert.True(EquipmentVisuals.Apply(defaults, "DA147", "", "", false, 2).Body.InxExtensionPath == original,
+                "disabling the mapping changed the original appearance");
+        }
+        finally
+        {
+            EquipmentVisuals.SetCostumeCatalog(CostumeVisualCatalog.Empty);
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+
+        return Task.CompletedTask;
     }
 
     private static Task KindOfAsync()

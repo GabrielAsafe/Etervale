@@ -9,6 +9,9 @@ namespace PristonTale.Gameplay.World.Remote;
 public static class EquipmentVisuals
 {
     private static readonly Dictionary<string, (int Index, string Mesh, bool LeftHand, string VillageBone)> Items = BuildItems();
+    private static CostumeVisualCatalog _costumeCatalog = CostumeVisualCatalog.Empty;
+
+    public static void SetCostumeCatalog(CostumeVisualCatalog catalog) => _costumeCatalog = catalog ?? CostumeVisualCatalog.Empty;
 
     // A class that carries a family otherwise than the catalog's hand and village bone: the Assassin holds a dagger in
     // each hand, the left one on its fifth weapon bone, and hangs the two on its back in a village; the Martial Artist
@@ -64,7 +67,11 @@ public static class EquipmentVisuals
         string body = defaults.Body.InxExtensionPath;
         // Premium costume bodies (CA) keep the class body; their wings are an effect (CostumeWings). An armour without a
         // body in the table also keeps it, so one unknown item cannot stop the frame that draws its wearer.
-        if (!string.IsNullOrEmpty(armor) && !armor.StartsWith("CA", StringComparison.OrdinalIgnoreCase)
+        if (_costumeCatalog.TryBody(armor, defaults.ArmorTableIndex, out var costumeBody))
+        {
+            body = costumeBody;
+        }
+        else if (!string.IsNullOrEmpty(armor) && !armor.StartsWith("CA", StringComparison.OrdinalIgnoreCase)
             && EquipmentVisualTables.ArmorSlots.TryGetValue(armor, out var index))
         {
             if ((uint)defaults.ArmorTableIndex >= (uint)EquipmentVisualTables.Armors.Length)
