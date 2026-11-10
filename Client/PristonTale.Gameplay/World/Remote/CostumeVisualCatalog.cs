@@ -15,6 +15,8 @@ public sealed class CostumeVisualCatalog
 
     public static CostumeVisualCatalog Empty { get; } = new(new Dictionary<string, Dictionary<int, string>>(StringComparer.OrdinalIgnoreCase));
 
+    public bool HasCostume(string itemKey) => itemKey is not null && _bodies.ContainsKey(itemKey);
+
     public bool TryBody(string itemKey, int armorTableIndex, out string path)
     {
         path = "";

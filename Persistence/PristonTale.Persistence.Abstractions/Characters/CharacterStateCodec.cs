@@ -32,7 +32,8 @@ public sealed record SavedItem(
 
 // ActiveSide: the bag page shown (inventory) or the weapon pair held (equipment); Hidden items are on the other side.
 public sealed record SavedItems(int Version, SavedItem[] Items, long Revision = 0, AppliedInventoryOperation[]? Operations = null,
-    AppliedServiceOperation[]? ServiceOperations = null, int ActiveSide = 0, Simulation.PersonalShops.AppliedShopPurchase[]? ShopPurchases = null);
+    AppliedServiceOperation[]? ServiceOperations = null, int ActiveSide = 0, Simulation.PersonalShops.AppliedShopPurchase[]? ShopPurchases = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] Guid CostumeItemId = default);
 public sealed record SavedSkill(uint Code, int Rank, int Uses = 0);
 public sealed record SavedSkills(int Version, int Points, int ElitePoints, SavedSkill[] Skills,
     long Revision = 0, AppliedProgressionOperation[]? Operations = null);
@@ -131,7 +132,10 @@ public static class CharacterStateCodec
         character.RestoreServiceHistory(inventory.ServiceOperations ?? []);
         character.RestorePurchaseHistory(inventory.ShopPurchases ?? []);
         character.RestoreProgressionHistory(skills.Revision, skills.Operations ?? []);
+        character.RestoreCostume(inventory.CostumeItemId);
     }
+
+    public static SavedItems ReadInventory(JsonText inventory) => ReadItems(inventory, JsonValueKind.Array);
 
     public static SavedItems CaptureInventory(PlayerCharacter character)
     {
@@ -146,7 +150,8 @@ public static class CharacterStateCodec
         }
 
         return new SavedItems(1, items.ToArray(), character.InventoryRevision, StoredHistory.Newest(character.InventoryOperations),
-            StoredHistory.Newest(character.ServiceOperations), character.BagPage, StoredHistory.Newest(character.ShopPurchases));
+            StoredHistory.Newest(character.ServiceOperations), character.BagPage, StoredHistory.Newest(character.ShopPurchases),
+            character.ActiveCostumeItemId());
     }
 
     public static SavedItems CaptureEquipment(PlayerCharacter character)

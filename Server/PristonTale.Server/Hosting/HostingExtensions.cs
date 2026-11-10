@@ -1,3 +1,4 @@
+using PristonTale.Simulation.Items;
 using PristonTale.Application.Contacts;
 using PristonTale.Application.Chat;
 using PristonTale.Application.GameMasters;
@@ -31,6 +32,7 @@ public static class HostingExtensions
     {
         builder.Services.AddSingleton<ISessionRegistry, SessionRegistry>();
         builder.Services.AddSingleton<CharacterClassRegistry>();
+        builder.Services.AddSingleton(_ => CostumeCatalog.Load(builder.Configuration["Summit:CostumesManifest"]));
 
         builder.Services.AddSingleton<AuthAppService>();
         builder.Services.AddSingleton<CharacterAppService>();
@@ -97,6 +99,7 @@ public static class HostingExtensions
             options: worldOptions,
             saves: services.GetRequiredService<ICharacterSaves>(),
             log: services.GetRequiredService<IGameLog>(),
+            costumes: services.GetRequiredService<CostumeCatalog>(),
             localizedData: services.GetRequiredService<WorldDataLanguagesHolder>()));
         builder.Services.AddHostedService<WorldTickService>();
         AddChat(builder);

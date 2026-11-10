@@ -150,7 +150,13 @@ public sealed class HudInventoryPanel
             }
 
             var tint = Withheld?.Invoke(item.InstanceId) == true ? HudPlacementColors.Carried : Color.White;
-            _counts.Draw(painter, icons, item, HudInventoryLayout.Bounds(origin, item), tint);
+            var itemBounds = HudInventoryLayout.Bounds(origin, item);
+            _counts.Draw(painter, icons, item, itemBounds, tint);
+            if (state.CostumeItemId != Guid.Empty && item.InstanceId == state.CostumeItemId)
+            {
+                painter.Fill(new Rectangle(itemBounds.X, itemBounds.Y, itemBounds.Width, 2), Color.Gold);
+                painter.Text("C", itemBounds.X + 2, itemBounds.Y + 2, Color.Gold);
+            }
             if (item.InstanceId == shadow?.InstanceId)
             {
                 _counts.Draw(painter, icons, item, offHand, tint);

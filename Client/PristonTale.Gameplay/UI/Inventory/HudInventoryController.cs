@@ -1,3 +1,4 @@
+using PristonTale.Gameplay.World.Remote;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using PristonTale.Gameplay.Screens.Framework;
@@ -658,6 +659,15 @@ public sealed class HudInventoryController(ScreenContext context, Func<Inventory
     // Right click: a usable item is used, a potion drunk, and an item worn or taken off.
     private void Use(OwnedItemView item)
     {
+        if (item.InBag && EquipmentVisuals.IsCostume(item.CatalogKey))
+        {
+            var clearing = _state.CostumeItemId == item.InstanceId;
+            SendInventory(new InventoryCommand(Guid.NewGuid(), _state.InventoryRevision,
+                clearing ? InventoryAction.ClearCostume : InventoryAction.WearCostume,
+                clearing ? Guid.Empty : item.InstanceId, 0, 0, default));
+            return;
+        }
+
         if (!item.Equipped && QuestItemUse?.Invoke(item) == true)
         {
             return;
