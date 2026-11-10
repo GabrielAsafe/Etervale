@@ -87,7 +87,6 @@ public static partial class SkillRuleCatalog
         && rule.PreImpactHitIndex is >= 0 and <= 16
         && (rule.PreImpactHitIndex == 0 || rule.PreImpactHitIndex < rule.MotionEvents.Length)
         && (rule.PreImpactEffect.Length > 0 || rule.PreImpactLeadMs == 0f)
-        && (rule.WeaponOrbit.Length == 0 || rule.WeaponOrbit.Length == 2 && rule.WeaponOrbit.All(static name => name.Length > 0));
         && (rule.WeaponOrbit.Length == 0 || rule.WeaponOrbit.Length == 2 && rule.WeaponOrbit.All(static name => name.Length > 0))
         && (rule.DefenseEffect.Length == 0 && rule.HitEffect.Length == 0 && rule.ShotEffect.Length == 0 || rule.Buff is not null)
         && (rule.DefenseBroods.Length == 0 || rule.DefenseEffect.Length > 0 && rule.Buff is { StatsOnly: true }) && rule.DefenseBroods.All(Enum.IsDefined);
