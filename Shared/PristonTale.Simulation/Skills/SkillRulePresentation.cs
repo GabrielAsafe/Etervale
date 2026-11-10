@@ -1,3 +1,5 @@
+using PristonTale.Simulation.World.Monsters;
+
 namespace PristonTale.Simulation.Skills;
 
 // How an entity looks while a skill's status is on it. Frost, Poison and Distortion are afflictions and show only
@@ -62,6 +64,17 @@ public sealed partial record SkillRule
     public const int CameraShakeReach = 400;
     // An effect on each enemy an area struck; the server reports each with a Struck impact.
     public string TargetEffect { get; init; } = "";
+    // An effect on the holder each time its buff defends it: an absorbing shield takes its share, a reflection strikes
+    // back, a guard returns life, or, for a buff of stats alone, a hit reaches the holder from a monster of DefenseBroods
+    // (from any attacker, players too, when empty). The server reports each with a Defended impact.
+    public string DefenseEffect { get; init; } = "";
+    public MonsterBrood[] DefenseBroods { get; init; } = [];
+    // While the status lasts the holder's basic hits show this effect on the struck target instead of the weapon's spark
+    // ("<effect>.<element>" for the element the status drew, when defined).
+    public string HitEffect { get; init; } = "";
+    // While the status lasts the holder's thrown basic attacks fly as this effect, from the weapon to the target, instead
+    // of the weapon itself.
+    public string ShotEffect { get; init; } = "";
 }
 
 public static partial class SkillRuleCatalog
@@ -75,4 +88,7 @@ public static partial class SkillRuleCatalog
         && (rule.PreImpactHitIndex == 0 || rule.PreImpactHitIndex < rule.MotionEvents.Length)
         && (rule.PreImpactEffect.Length > 0 || rule.PreImpactLeadMs == 0f)
         && (rule.WeaponOrbit.Length == 0 || rule.WeaponOrbit.Length == 2 && rule.WeaponOrbit.All(static name => name.Length > 0));
+        && (rule.WeaponOrbit.Length == 0 || rule.WeaponOrbit.Length == 2 && rule.WeaponOrbit.All(static name => name.Length > 0))
+        && (rule.DefenseEffect.Length == 0 && rule.HitEffect.Length == 0 && rule.ShotEffect.Length == 0 || rule.Buff is not null)
+        && (rule.DefenseBroods.Length == 0 || rule.DefenseEffect.Length > 0 && rule.Buff is { StatsOnly: true }) && rule.DefenseBroods.All(Enum.IsDefined);
 }
