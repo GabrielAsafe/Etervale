@@ -17,6 +17,15 @@ namespace PristonTale.Engine3D.Rendering;
 
 public sealed partial class PristonRenderer : IDisposable
 {
+    // Register a texture source fallback before the scene starts loading.
+    // This mapping belongs to a renderer instance, not to the global asset resolver.
+    public void SetTextureFallbackDirectory(string sourceDirectory, string fallbackDirectory) =>
+        _textureLoader.SetFallbackDirectory(sourceDirectory, fallbackDirectory);
+
+    // A single named material in a shared source folder may use its proven original texture family.
+    public void SetTextureFallbackForName(string sourceDirectory, string textureName, string fallbackDirectory) =>
+        _textureLoader.SetFallbackTextureDirectory(sourceDirectory, textureName, fallbackDirectory);
+
     private static readonly ConditionalWeakTable<PristonActor, PreparedActorGeometry> PreparedActorGeometries = new();
 
     // The original game advances stage-object animation by two ticks per millisecond.
