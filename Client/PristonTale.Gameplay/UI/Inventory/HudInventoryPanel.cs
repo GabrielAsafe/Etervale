@@ -81,7 +81,7 @@ public sealed class HudInventoryPanel
         for (var index = 0; index < items.Count; index++)
         {
             var item = items[index];
-            if (!HudInventoryLayout.Shows(item, boxShown))
+            if (!HudInventoryLayout.Shows(item, boxShown) || controller.CostumePage && item.Equipped)
             {
                 continue;
             }
@@ -144,7 +144,8 @@ public sealed class HudInventoryPanel
             var item = items[index];
             // The carried item is on the cursor only: its place stays empty until it is set down, as in the original, and
             // a thrown or picked up item's until the owner state shows where it went.
-            if (item.BeltBox >= 0 || !HudInventoryLayout.Shows(item, boxShown) || controller.Hides(item))
+            if (item.BeltBox >= 0 || !HudInventoryLayout.Shows(item, boxShown) || controller.Hides(item)
+                || controller.CostumePage && item.Equipped)
             {
                 continue;
             }
@@ -163,7 +164,22 @@ public sealed class HudInventoryPanel
             }
         }
 
-        DrawButtons(painter, origin, state, boxShown, pointer, interactive);
+        if (controller.CostumePage)
+        {
+            // Overlay only the equipment display; the real armour remains equipped on the server.
+            painter.Fill(HudInventoryLayout.CostumeArea(origin), Color.FromNonPremultiplied(16, 20, 32, 242));
+            var slot = HudInventoryLayout.CostumeSlot(origin);
+            painter.Sprite(HudArt.CoverLarge, slot.X, slot.Y);
+            var costume = OwnedItemView.Find(state.Items, state.CostumeItemId);
+            if (costume is { InBag: true })
+            {
+                _counts.Draw(painter, icons, costume, slot, Color.White);
+                painter.Fill(new Rectangle(slot.X, slot.Y, slot.Width, 2), Color.Gold);
+            }
+            painter.Text("COSTUME", origin.X + 644, origin.Y + 415, Color.Gold);
+        }
+
+        DrawButtons(painter, origin, state, boxShown, controller.CostumePage, pointer, interactive);
         var money = HudInventoryLayout.Money(origin);
         painter.TextCentered(_gold, money.Left, money.Right, money.Y);
         var weight = HudInventoryLayout.Weight(origin);
@@ -272,7 +288,8 @@ public sealed class HudInventoryPanel
 
     // The original lights the shown page's and the held pair's arrow and the open special item box's button; the button
     // under the pointer lights too and shows its label above it, and the close button shows its exit sign.
-    private static void DrawButtons(HudPainter painter, Point origin, OwnerState state, bool boxShown, Point pointer, bool interactive)
+    private static void DrawButtons(HudPainter painter, Point origin, OwnerState state, bool boxShown,
+        bool costumePage, Point pointer, bool interactive)
     {
         var questBox = HudInventoryLayout.QuestBoxButton(origin);
         if (!boxShown)
@@ -281,6 +298,13 @@ public sealed class HudInventoryPanel
         }
 
         DrawButton(painter, questBox, HudArt.QuestBoxButtonOpen, boxShown, boxShown ? HudArt.QuestBoxCloseHint : HudArt.QuestBoxHint, 0, pointer, interactive);
+        var costumeButton = HudInventoryLayout.CostumeButton(origin);
+        painter.Fill(costumeButton, costumePage ? Color.Gold : Color.FromNonPremultiplied(48, 46, 36, 210));
+        painter.Text("C", costumeButton.X + 4, costumeButton.Y + 1, costumePage ? Color.Black : Color.Gold);
+        if (interactive && costumeButton.Contains(pointer))
+        {
+            painter.Sprite(HudArt.CostumeHint, costumeButton.X, costumeButton.Y - HudInventoryLayout.HintRise);
+        }
         for (var side = 0; side < PlayerCharacter.Sides; side++)
         {
             var art = side == 0 ? HudArt.SideLeft : HudArt.SideRight;
@@ -313,6 +337,8 @@ public sealed class HudInventoryPanel
         // A click with an item carried sets it down, so no action is offered for the item under it.
         var action = _carrying ? ""
             : item.Equipped ? ClientText.Get("Inventory.HintUnequip")
+            : item.InBag && PristonTale.Gameplay.World.Remote.EquipmentVisuals.IsCostume(item.CatalogKey)
+                ? "Wear / remove costume"
             : item.QuestBox >= 0 ? ClientText.Get("Inventory.HintCarry")
             : item.Kind == ItemKind.Potion ? ClientText.Get("Inventory.HintDrink")
             : usable ? ClientText.Get("Inventory.HintUse")

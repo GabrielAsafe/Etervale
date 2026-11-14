@@ -80,6 +80,15 @@ public static class CharacterStateCodec
                 throw new InvalidDataException("Invalid saved equipment.");
             }
 
+            // Older builds could equip Hopy as real armour. Preserve that item in a bag
+            // rather than failing character login after the new equip rule is enforced.
+            if (CostumeCatalog.IsExclusiveCosmeticKey(item.Definition.CatalogKey))
+            {
+                if (!character.Inventory.TryAdd(item) && !character.HiddenBag.TryAdd(item))
+                    throw new InvalidDataException("No room to migrate previously equipped costume.");
+                continue;
+            }
+
             if (saved.Hidden)
             {
                 if (!character.RestoreStored(saved.Slot.Value, item))

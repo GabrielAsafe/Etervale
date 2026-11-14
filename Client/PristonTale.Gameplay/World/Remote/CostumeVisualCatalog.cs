@@ -2,6 +2,7 @@ using PristonTale.Engine3D.Equipment;
 using System.Text.Json;
 using PristonTale.Assets;
 using PristonTale.Engine3D.Diagnostics;
+using PristonTale.Simulation.Items;
 
 namespace PristonTale.Gameplay.World.Remote;
 
@@ -51,10 +52,9 @@ public sealed class CostumeVisualCatalog
             foreach (var entry in root.GetProperty("costumes").EnumerateArray())
             {
                 var key = entry.GetProperty("itemKey").GetString();
-                if (string.IsNullOrWhiteSpace(key) || key.StartsWith("CA", StringComparison.OrdinalIgnoreCase)
-                    || !bodies.TryAdd(key, new Dictionary<int, string>()))
+                if (!CostumeCatalog.IsEligibleKey(key) || !bodies.TryAdd(key, new Dictionary<int, string>()))
                 {
-                    // The CA101-CA124 family remains explicitly deferred and cannot be activated here.
+                    // Only CA547/CA647 may be opted in from the CA family.
                     throw new InvalidDataException("Invalid, disabled or duplicate costume item key.");
                 }
 
@@ -79,10 +79,8 @@ public sealed class CostumeVisualCatalog
                     variants.Add(classIndex, relative);
                 }
 
-                if (variants.Count == 0)
-                {
-                    throw new InvalidDataException($"No body variants for costume {key}.");
-                }
+                // Entries with no model remain available in the cosmetic slot; the renderer
+                // retains the real armour appearance until a verified body override exists.
             }
 
             log.Info($"[Costume] Validated {bodies.Count} optional body overrides.");

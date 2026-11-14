@@ -54,9 +54,27 @@ internal static class EquipmentTests
                 "an explicitly worn costume failed to override the character body");
             Assert.True(EquipmentVisuals.Apply(defaults, "DA108", "", "", false, 2, "DA147").Body.InxExtensionPath == model,
                 "an explicitly worn costume failed to override a different armor body");
-            File.WriteAllText(manifest, "{\"version\":1,\"costumes\":[{\"itemKey\":\"CA101\",\"bodies\":{\"0\":\"char/tmABCD/Ca001.inx\"}}]}");
-            Assert.True(ReferenceEquals(CostumeVisualCatalog.Load(root, log), CostumeVisualCatalog.Empty),
-                "deferred CA costumes were activated");
+            foreach (var hopyKey in new[] { "CA547", "CA647" })
+            {
+                File.WriteAllText(manifest, $$$"""
+                    {"version":1,"costumes":[{"itemKey":"{{{hopyKey}}}","bodies":{"0":"char/tmABCD/Ca001.inx"}}]}
+                    """);
+                var hopyCatalog = CostumeVisualCatalog.Load(root, log);
+                EquipmentVisuals.SetCostumeCatalog(hopyCatalog);
+                Assert.True(EquipmentVisuals.IsCostume(hopyKey)
+                    && EquipmentVisuals.Apply(defaults, "DA108", "", "", false, 2, hopyKey).Body.InxExtensionPath == model,
+                    "an explicitly enabled Hopy costume failed to override the body");
+                Assert.True(EquipmentVisuals.Apply(defaults, "DA147", "", "", false, 2).Body.InxExtensionPath == original,
+                    "an original armor changed without an active cosmetic binding");
+            }
+            foreach (var blocked in new[] { "CA101", "CA124", "CA125" })
+            {
+                File.WriteAllText(manifest, $$$"""
+                    {"version":1,"costumes":[{"itemKey":"{{{blocked}}}","bodies":{"0":"char/tmABCD/Ca001.inx"}}]}
+                    """);
+                Assert.True(ReferenceEquals(CostumeVisualCatalog.Load(root, log), CostumeVisualCatalog.Empty),
+                    "a deferred or unapproved CA costume was activated");
+            }
             File.WriteAllText(manifest, "{\"version\":1,\"costumes\":[{\"itemKey\":\"DA147\",\"bodies\":{\"0\":\"../char/tmABCD/Ca001.inx\"}}]}");
             Assert.True(ReferenceEquals(CostumeVisualCatalog.Load(root, log), CostumeVisualCatalog.Empty),
                 "a path leaving the asset root was accepted");

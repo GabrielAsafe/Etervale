@@ -11,13 +11,15 @@ namespace PristonTale.Tests;
 internal static class CostumeWardrobeTests
 {
     private const string Manifest = """
-        {"version":1,"costumes":[{"itemKey":"DA147","bodies":{"0":"char/tmABCD/Ca001.inx"}}]}
+        {"version":1,"costumes":[{"itemKey":"DA147","bodies":{"1":"char/tmABCD/Ca001.inx"}}]}
         """;
 
     public static IEnumerable<(string, Func<Task>)> Cases()
     {
         yield return ("cosmetic server manifest refuses deferred CA and duplicates", CatalogAsync);
+        yield return ("Hopy costumes require explicit opt-in and keep combat equipment unchanged", HopyAsync);
         yield return ("cosmetic operation requires ownership, server permission and current revision, without combat changes", OwnershipAsync);
+        yield return ("Hopy costume cannot replace armour equipment slot", HopyArmorAsync);
         yield return ("cosmetic binding survives a clone and a saved inventory relog", PersistenceAsync);
         yield return ("cosmetic identity round trips across roster, owner status and remote description with clan fields", WireAsync);
         yield return ("cosmetic binding expires when its item leaves the bag", RemovalAsync);
@@ -28,8 +30,18 @@ internal static class CostumeWardrobeTests
         var catalog = CostumeCatalog.FromJson(Manifest);
         Assert.True(catalog.Contains("da147") && !catalog.Contains("DA148") && !CostumeCatalog.Empty.Contains("DA147"),
             "cosmetic permission was not an opt-in allowlist");
+        var hopy = CostumeCatalog.FromJson("""
+            {"version":1,"costumes":[{"itemKey":"CA547","bodies":{"7":"char/tmABCD/mD002.inx"}},
+                                       {"itemKey":"CA647","bodies":{"7":"char/tmABCD/mD002.inx"}}]}
+            """);
+        Assert.True(hopy.Contains("ca547") && hopy.Contains("CA647")
+            && !hopy.Contains("CA101") && !CostumeCatalog.Empty.Contains("CA547"),
+            "CA547/CA647 must require a manifest and never enable deferred CA codes");
         foreach (var invalid in new[] {
             """{"version":1,"costumes":[{"itemKey":"CA101","bodies":{"0":"x.inx"}}]}""",
+            """{"version":1,"costumes":[{"itemKey":"CA124","bodies":{"0":"x.inx"}}]}""",
+            """{"version":1,"costumes":[{"itemKey":"CA125","bodies":{"0":"x.inx"}}]}""",
+            """{"version":1,"costumes":[{"itemKey":"CA126","bodies":{"0":"x.inx"}}]}""",
             """{"version":1,"costumes":[{"itemKey":"DA147","bodies":{"0":"x.inx"}},{"itemKey":"DA147","bodies":{"0":"y.inx"}}]}"""
         })
         {
@@ -37,7 +49,32 @@ internal static class CostumeWardrobeTests
             try { CostumeCatalog.FromJson(invalid); } catch (InvalidDataException) { refused = true; }
             Assert.True(refused, "forbidden or duplicate manifest entry accepted");
         }
-        Assert.True(ReferenceEquals(CostumeCatalog.Load(null), CostumeCatalog.Empty), "empty server configuration enabled costumes");
+        Assert.True(ReferenceEquals(CostumeCatalog.Load(null!), CostumeCatalog.Empty), "empty server configuration enabled costumes");
+        return Task.CompletedTask;
+    }
+
+    private static Task HopyAsync()
+    {
+        foreach (var key in new[] { "CA547", "CA647" })
+        {
+            var character = new CharacterClassRegistry().CreatePlayer(PlayerClass.Magician, "Hopy", 18);
+            var hopy = new ItemInstance(new ItemDefinition(ItemCodes.Parse(key), "Hopy Costume(1Day)", ItemKind.Armor)
+            {
+                CatalogKey = key
+            });
+            Assert.True(character.Inventory.TryPlace(hopy, 0), "Hopy did not fit in the bag");
+            var permitted = CostumeCatalog.FromJson($$$"""
+                {"version":1,"costumes":[{"itemKey":"{{{key}}}","bodies":{"7":"char/tmABCD/mD002.inx"}}]}
+                """);
+            var before = character.Derived;
+            var wear = new InventoryCommand(Guid.NewGuid(), character.InventoryRevision,
+                InventoryAction.WearCostume, hopy.InstanceId, 0, 0, default);
+            Assert.True(InventoryCommands.Apply(character, wear, permitted)
+                && character.ActiveCostumeKey(permitted) == key && character.Derived == before,
+                "Hopy failed to attach cosmetically or modified combat stats");
+            Assert.True(character.TryClearCostume() && character.ActiveCostumeKey(permitted) == "",
+                "Hopy cosmetic binding could not be cleared");
+        }
         return Task.CompletedTask;
     }
 
@@ -50,6 +87,26 @@ internal static class CostumeWardrobeTests
         Assert.True(character.Inventory.TryPlace(item, 0), "test costume does not fit in bag");
         character.Equip(EquipmentSlot.Armor, new ItemInstance(armor));
         return (character, cosmetic, armor, item);
+    }
+
+    private static Task HopyArmorAsync()
+    {
+        foreach (var key in new[] { "CA547", "CA647" })
+        {
+            var character = new CharacterClassRegistry().CreatePlayer(PlayerClass.Magician, "Hopy", 18);
+            var definition = new ItemDefinition(ItemCodes.Parse(key), "Hopy Costume(1Day)", ItemKind.Armor, EquipmentSlot.Armor)
+            {
+                CatalogKey = key
+            };
+            var item = new ItemInstance(definition);
+            Assert.True(character.Inventory.TryPlace(item, 0), "test Hopy did not fit into bag");
+            var command = new InventoryCommand(Guid.NewGuid(), character.InventoryRevision,
+                InventoryAction.Equip, item.InstanceId, 0, 0, EquipmentSlot.Armor);
+            Assert.True(!InventoryCommands.Apply(character, command)
+                && character.GetEquipped(EquipmentSlot.Armor) is null,
+                "a Hopy costume was equipped as a real armour item");
+        }
+        return Task.CompletedTask;
     }
 
     private static Task OwnershipAsync()

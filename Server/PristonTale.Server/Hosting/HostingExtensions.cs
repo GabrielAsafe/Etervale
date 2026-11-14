@@ -32,7 +32,15 @@ public static class HostingExtensions
     {
         builder.Services.AddSingleton<ISessionRegistry, SessionRegistry>();
         builder.Services.AddSingleton<CharacterClassRegistry>();
-        builder.Services.AddSingleton(_ => CostumeCatalog.Load(builder.Configuration["Summit:CostumesManifest"]));
+        // Opt-in explícito: sem caminho configurado, os costumes permanecem desativados.
+        // Com caminho configurado, resolver a partir da raiz do checkout (e não do content root do servidor).
+        builder.Services.AddSingleton(_ =>
+        {
+            var manifest = builder.Configuration["Summit:CostumesManifest"];
+            return string.IsNullOrWhiteSpace(manifest)
+                ? CostumeCatalog.Empty
+                : CostumeCatalog.Load(DataPath.Resolve(manifest));
+        });
 
         builder.Services.AddSingleton<AuthAppService>();
         builder.Services.AddSingleton<CharacterAppService>();

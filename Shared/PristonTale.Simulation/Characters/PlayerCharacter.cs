@@ -371,6 +371,12 @@ public sealed partial class PlayerCharacter
             return false;
         }
 
+        // Hopy is exclusively cosmetic, including on auto-equip, direct Equip and saved equipment.
+        if (CostumeCatalog.IsExclusiveCosmeticKey(item.Definition.CatalogKey))
+        {
+            return false;
+        }
+
         if (!ItemEquipmentMetadata.Fits(item.Definition.Kind, item.Definition.EquipSlot, slot))
         {
             return false;
@@ -645,7 +651,8 @@ public sealed partial class PlayerCharacter
     {
         if (CostumeItemId == Guid.Empty) return Guid.Empty;
         var item = CostumeBagItem(CostumeItemId);
-        return item is not null && item.Count == 1 && (catalog is null || catalog.Contains(item.Definition.CatalogKey))
+        return item is not null && item.Count == 1 && (catalog is null ||
+            catalog.Allows(item.Definition.CatalogKey, ClassProfiles.Of(Class.Class).Female))
             ? CostumeItemId : Guid.Empty;
     }
 
@@ -659,7 +666,8 @@ public sealed partial class PlayerCharacter
     {
         if (itemId == Guid.Empty || itemId == CostumeItemId || catalog is null) return false;
         var item = CostumeBagItem(itemId);
-        if (item is null || item.Count != 1 || !catalog.Contains(item.Definition.CatalogKey)) return false;
+        if (item is null || item.Count != 1
+            || !catalog.Allows(item.Definition.CatalogKey, ClassProfiles.Of(Class.Class).Female)) return false;
         CostumeItemId = itemId;
         TouchInventory();
         return true;

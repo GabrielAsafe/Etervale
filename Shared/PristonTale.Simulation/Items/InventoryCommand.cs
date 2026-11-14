@@ -68,6 +68,8 @@ public static class InventoryCommands
             InventoryAction.Split => character.Inventory.TrySplit(anchor, command.Destination, command.Count),
             InventoryAction.Merge => character.Inventory.TryMerge(anchor, command.Destination),
             InventoryAction.Swap => character.Inventory.TrySwap(anchor, command.Destination),
+            // Server authoritative: Hopy items cannot be equipped in the real armour slot.
+            InventoryAction.Equip when IsHopyCostume(character, anchor) => false,
             InventoryAction.Equip => Fitted(character, character.TryEquipFromInventory(anchor, command.Slot)),
             InventoryAction.Unequip => character.GetEquipped(command.Slot)?.InstanceId == command.ItemId && Fitted(character, character.TryUnequip(command.Slot)),
             InventoryAction.ConsumePotion => command.Count == 1 && character.Life > 0 && (anchor >= 0
@@ -82,6 +84,12 @@ public static class InventoryCommands
             InventoryAction.ClearCostume => character.TryClearCostume(),
             _ => false
         };
+    }
+
+    private static bool IsHopyCostume(PlayerCharacter character, int anchor)
+    {
+        var key = anchor >= 0 ? character.Inventory[anchor]?.Definition.CatalogKey : null;
+        return CostumeItemPolicy.IsCosmetic(key);
     }
 
     // Gear changes the potion space, which the belt then fits (only after a change that went through).
