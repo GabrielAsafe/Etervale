@@ -105,13 +105,31 @@ public static class AssetFiles
             return null;
         }
 
-        foreach (var entry in Directory.EnumerateFileSystemEntries(current).Order(StringComparer.Ordinal))
+        // ETERVALE_ANDROID_ASSETS_V4: do not enumerate inaccessible directories
+        // (such as another app's /data/user/0 directory). Missing assets should
+        // be reported as not found, not as UnauthorizedAccessException.
+        try
         {
-            if (entry != direct && string.Equals(Path.GetFileName(entry), parts[index], StringComparison.OrdinalIgnoreCase)
-                && Walk(entry, parts, index + 1) is { } found)
+            foreach (var entry in Directory.EnumerateFileSystemEntries(current).Order(StringComparer.Ordinal))
             {
-                return found;
+                if (entry != direct && string.Equals(Path.GetFileName(entry), parts[index], StringComparison.OrdinalIgnoreCase)
+                    && Walk(entry, parts, index + 1) is { } found)
+                {
+                    return found;
+                }
             }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (System.Security.SecurityException)
+        {
+            return null;
         }
 
         return null;

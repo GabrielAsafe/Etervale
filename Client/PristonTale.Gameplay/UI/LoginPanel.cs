@@ -1,3 +1,4 @@
+#nullable enable
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
@@ -92,11 +93,15 @@ public sealed class LoginPanel
         return intent;
     }
 
+    // ETERVALE_ANDROID_V5: null em desktop/H700; Android liga SDL_StartTextInput.
+    public static Action<bool>? AndroidKeyboardRequested { get; set; }
+
     private void SetFocus(FocusTarget focus)
     {
         _focus = focus;
         Account.Focused = focus == FocusTarget.Account;
         Password.Focused = focus == FocusTarget.Password;
+        AndroidKeyboardRequested?.Invoke(focus == FocusTarget.Account || focus == FocusTarget.Password);
     }
 
     public void Draw(Viewport viewport)

@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-android</TargetFramework>
+    <SupportedOSPlatformVersion>24</SupportedOSPlatformVersion>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationId>com.etervale.game</ApplicationId>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+    <!--
+      Enables trim analyzers and full trimming during Release mode.
+      To learn more, see: https://learn.microsoft.com/dotnet/core/deploying/trimming/trimming-options#trimming-granularity
+    -->
+    <TrimMode>full</TrimMode>
+  </PropertyGroup>
+
+  <!-- Codigo real do cliente 3D; programa Desktop e o builder de Content ficam fora do APK. -->
+  <ItemGroup>
+    <ProjectReference Include="../../Client/PristonTale.Gameplay/PristonTale.Gameplay.csproj" />
+    <Compile Include="../../Client/PristonTale/Game1.cs" Link="Game/Game1.cs" />
+    <Compile Include="../../Client/PristonTale/Display/*.cs" Link="Game/Display/%(Filename)%(Extension)" />
+  </ItemGroup>
+  <!-- ETERVALE_ANDROID_NATIVE_RUNTIME -->
+  <ItemGroup>
+    <AndroidNativeLibrary Include="../../monogame/runtime/bin/android-arm64/libmgruntime.so"
+                          Link="lib/arm64-v8a/libmgruntime.so" />
+  </ItemGroup>
+  <!-- ETERVALE_SDL2_JAVA_BRIDGE_V2 -->
+  <ItemGroup>
+    <AndroidLibrary Include="../EtervaleSDL2Java/sdl2-android.jar" Bind="false" />
+  </ItemGroup>
+  <!-- ETERVALE_ANDROID_CONTENT_V3 -->
+  <ItemGroup>
+    <!-- These are compiled DesktopVK .xnb files. Raw assets/ stay outside APK. -->
+    <AndroidAsset Include="ContentStaging/**/*.xnb"
+                  LogicalName="Content/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

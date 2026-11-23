@@ -1,0 +1,21 @@
+# Build outputs and downloaded/generated Android content (not source)
+**/bin/
+**/obj/
+**/build/
+**/classes/
+**/ContentStaging/
+**/ContentStaging.v3-tmp/
+*.jar
+*.apk
+*.a
+*.so
+*.o
+*.d
+*.log
+*.cache
+*.tmp*
+*.bak
+*.backup
+*.before-*
+*.antes-*
+etervale_dependencias_3d.txt
