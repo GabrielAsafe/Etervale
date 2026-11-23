@@ -16,6 +16,7 @@ namespace PristonTale.Engine3D.Rendering;
 // Drawing the queues: batches, the depth pre-pass, outlines and the temporal blend.
 public sealed partial class PristonRenderer
 {
+    // ETERVALE_H700_LOW_FX_MARKER
     private void DrawQueue(
         PristonRenderQueue<RenderBatch> queue,
         ref int staticBatches,
@@ -79,6 +80,8 @@ public sealed partial class PristonRenderer
 
         if (intoScene && _prepassDrawn && _screenReflections && _smoothSurfaceVisible)
         {
+            H700EnsureEnvironment();
+            H700EnsureReflections();
             Profiler.Begin(RenderSection.Reflections);
             var frame = _reflectionFrame;
             _reflections.Run(

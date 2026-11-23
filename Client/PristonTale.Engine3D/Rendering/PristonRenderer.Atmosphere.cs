@@ -46,7 +46,8 @@ public sealed partial class PristonRenderer
     private static readonly float[] SkyShareOfCoverage = [0f, 0.004f, 0.017f, 0.045f, 0.102f, 0.187f, 0.358f, 0.539f, 0.679f, 0.78f, 0.87f,
         0.939f, 0.976f, 0.99f, 0.997f, 1f];
 
-    private readonly PristonPhysicalSky _physicalSky;
+    // ETERVALE_H700_LOW_FX_MARKER
+    private PristonPhysicalSky _physicalSky;
     private Vector2 _cloudDrift;
 
     public bool RealisticSky { get; set; } = true;
@@ -75,6 +76,11 @@ public sealed partial class PristonRenderer
         if (!PhysicalSkyShown)
         {
             return;
+        }
+        if (_physicalSky is null)
+        {
+            System.Console.WriteLine("[H700 LOWFX] LOAD PhysicalSky por necessidade");
+            _physicalSky = new PristonPhysicalSky(_graphicsDevice, _h700FxContent, _sceneTargets.Triangle, _log);
         }
 
         var pre = _exposure.PreExposure;

@@ -137,6 +137,12 @@ public sealed class PristonAudioLibrary : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(assetRoot);
         ArgumentNullException.ThrowIfNull(log);
 
+        if (System.Environment.GetEnvironmentVariable("ETERVALE_H700_SKIP_AUDIO") == "1")
+        {
+            log.Warn("[H700] Audio bootstrap ignorado para poupar RAM.");
+            return new PristonAudioLibrary();
+        }
+
         var library = new PristonAudioLibrary();
         try
         {

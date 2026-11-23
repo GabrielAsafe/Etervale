@@ -32,8 +32,12 @@ internal sealed class PristonSceneTargets : IDisposable
     private readonly EffectParameter _skyExposure;
     private readonly EffectParameter _skySourceRect;
     private readonly EffectParameter _backgroundRadiance;
+    // ETERVALE_H700_LOW_FX_MARKER
+    private readonly bool _h700LowFx;
+    private readonly ContentManager _h700Content;
+    private readonly IClientLog _h700Log;
     private readonly PristonPostProcessor _post;
-    private readonly PristonTemporalAntiAliasing _temporal;
+    private PristonTemporalAntiAliasing _temporal;
     private readonly PristonBoundTargets _callerTargets = new();
     private readonly RenderTargetBinding[] _temporalBinding = new RenderTargetBinding[2];
     private readonly RenderTargetBinding[] _prepassBinding = new RenderTargetBinding[3];
@@ -52,9 +56,25 @@ internal sealed class PristonSceneTargets : IDisposable
 
     public PristonSceneTargets(GraphicsDevice device, ContentManager content, IClientLog log)
     {
+        // ETERVALE_H700_TRACE_SCENE_MARKER
+        void TraceH700Scene(string stage)
+        {
+            if (System.Environment.GetEnvironmentVariable("ETERVALE_H700_TRACE_SCENE") != "1")
+                return;
+            using var proc = System.Diagnostics.Process.GetCurrentProcess();
+            var rss = proc.WorkingSet64 / 1048576;
+            var heap = System.GC.GetTotalMemory(false) / 1048576;
+            System.Console.WriteLine($"[H700 SCENE] {stage}; RSS={rss} MiB; heap={heap} MiB");
+        }
+        TraceH700Scene("inicio");
         _device = device;
+        _h700Content = content;
+        _h700Log = log;
+        _h700LowFx = System.Environment.GetEnvironmentVariable("ETERVALE_H700_LOW_FX") == "1";
         _triangle = new PristonFullscreenTriangle(device);
+        TraceH700Scene("01 fullscreen triangle");
         _skyComposite = PristonShaderLibrary.LoadRequired(content, SkyCompositeAsset, log);
+        TraceH700Scene("02 SkyComposite FX");
         _skyTechnique = _skyComposite.Techniques["SkyComposite"];
         _backgroundTechnique = _skyComposite.Techniques["Background"];
         _skyColor = _skyComposite.Parameters["SkyColor"];
@@ -62,8 +82,13 @@ internal sealed class PristonSceneTargets : IDisposable
         _skySourceRect = _skyComposite.Parameters["SkySourceRect"];
         _backgroundRadiance = _skyComposite.Parameters["BackgroundRadiance"];
         _post = new PristonPostProcessor(device, content, log, _triangle);
-        _temporal = new PristonTemporalAntiAliasing(device, _triangle,
-            PristonShaderLibrary.LoadRequired(content, PristonTemporalAntiAliasing.Asset, log));
+        TraceH700Scene("03 postprocessor completo");
+        if (!_h700LowFx)
+            _temporal = new PristonTemporalAntiAliasing(device, _triangle,
+                PristonShaderLibrary.LoadRequired(content, PristonTemporalAntiAliasing.Asset, log));
+        else
+            System.Console.WriteLine("[H700 LOWFX] DEFER TemporalAA");
+        TraceH700Scene("04 temporal AA FX");
         _bindCaller = BindCaller;
         BindAction = Bind;
     }
@@ -112,6 +137,12 @@ internal sealed class PristonSceneTargets : IDisposable
         }
 
         var samples = temporal || prepass ? 0 : multiSampleCount;
+        if (temporal && _temporal is null)
+        {
+            System.Console.WriteLine("[H700 LOWFX] LOAD TemporalAA por necessidade");
+            _temporal = new PristonTemporalAntiAliasing(_device, _triangle,
+                PristonShaderLibrary.LoadRequired(_h700Content, PristonTemporalAntiAliasing.Asset, _h700Log));
+        }
         EnsureTargets(Math.Max(width, 1), Math.Max(height, 1), samples, temporal, prepass && samples == 0);
         _device.SetRenderTarget(_color);
         _device.Viewport = _callerViewport;
@@ -214,7 +245,7 @@ internal sealed class PristonSceneTargets : IDisposable
         _post.Process(scene, frame with { SourceRect = SourceRect(_color), Viewport = _callerViewport }, _bindCaller);
     }
 
-    public void InvalidateHistory() => _temporal.Invalidate();
+    public void InvalidateHistory() => _temporal?.Invalidate();
 
     private void BindCaller()
     {
@@ -284,7 +315,7 @@ internal sealed class PristonSceneTargets : IDisposable
         _normals?.Dispose();
         _sky?.Dispose();
         _post.Dispose();
-        _temporal.Dispose();
+        _temporal?.Dispose();
         _triangle.Dispose();
         _skyComposite.Dispose();
     }

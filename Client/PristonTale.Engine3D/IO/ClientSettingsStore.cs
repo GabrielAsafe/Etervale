@@ -38,6 +38,27 @@ public sealed class ClientSettingsStore
 
     public string LastError => Volatile.Read(ref _lastError);
 
+    // ETERVALE_H700_RESOLUTION_V1: tamanho real do painel H700, sem alterar o perfil PC.
+    private ClientSettings H700Native(ClientSettings settings)
+    {
+        if (Environment.GetEnvironmentVariable("ETERVALE_H700_LITE") != "1")
+        {
+            return settings;
+        }
+
+        var result = settings with
+        {
+            WindowWidth = 640,
+            WindowHeight = 480,
+            WindowMode = WindowMode.Windowed,
+            WindowX = null,
+            WindowY = null,
+            WindowMaximized = false
+        };
+        _log.Info("[H700 RES] Resolucao solicitada: 640x480; painel nativo 4:3.");
+        return result;
+    }
+
     public ClientSettings Load()
     {
         try
@@ -46,7 +67,7 @@ public sealed class ClientSettingsStore
             {
                 var defaults = new ClientSettings();
                 QueueSave(defaults);
-                return defaults;
+                return H700Native(defaults);
             }
 
             var settings = JsonSerializer.Deserialize<ClientSettings>(File.ReadAllBytes(_path), JsonOptions)
@@ -55,17 +76,17 @@ public sealed class ClientSettingsStore
             {
                 _readOnly = true;
                 ReportError($"Unsupported settings version {settings.Version}; preserving {_path} and using defaults.");
-                return new ClientSettings();
+                return H700Native(new ClientSettings());
             }
 
-            return settings.Validate(_log);
+            return H700Native(settings.Validate(_log));
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
         {
             // A malformed/unreadable document is retained for recovery. Explicit user changes must not destroy it.
             _readOnly = true;
             ReportError($"Cannot load {_path}; using defaults without overwriting the file: {exception.Message}");
-            return new ClientSettings();
+            return H700Native(new ClientSettings());
         }
     }
 

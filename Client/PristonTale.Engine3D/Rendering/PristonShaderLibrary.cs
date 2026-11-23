@@ -20,6 +20,17 @@ internal enum ShaderVertexFactory
 // GltfSurface) and the constants they share: the frame block, the fog, the lighting and the material model's inputs.
 internal sealed class PristonShaderLibrary : IDisposable
 {
+    // ETERVALE_H700_SHADER_TRACE_MARKER
+    private static void H700ShaderTrace(string stage)
+    {
+        if (System.Environment.GetEnvironmentVariable("ETERVALE_H700_TRACE_SHADERS") != "1")
+            return;
+        using var proc = System.Diagnostics.Process.GetCurrentProcess();
+        var rss = proc.WorkingSet64 / 1048576;
+        var heap = System.GC.GetTotalMemory(false) / 1048576;
+        System.Console.WriteLine($"[H700 SHADER] {stage}; RSS={rss} MiB; heap={heap} MiB");
+    }
+
     public const string StaticSurfaceAsset = "Effects/StaticSurface";
     public const string SkinnedSurfaceAsset = "Effects/SkinnedSurface";
     public const string GltfSurfaceAsset = "Effects/GltfSurface";
@@ -44,8 +55,8 @@ internal sealed class PristonShaderLibrary : IDisposable
     internal const double VertexAnimationPeriodSeconds = 40.0 * Math.PI;
 
     private readonly SurfaceEffect _static;
-    private readonly SurfaceEffect _skinned;
-    private readonly SurfaceEffect _gltf;
+    private SurfaceEffect _skinned;
+    private SurfaceEffect _gltf;
     private readonly SurfaceEffect _forestInstanced;
     private readonly Vector4[] _lightPositions = new Vector4[MaxLocalLightCount];
     private readonly Vector4[] _lightColors = new Vector4[MaxLocalLightCount];
@@ -53,28 +64,85 @@ internal sealed class PristonShaderLibrary : IDisposable
     private readonly StructuredBuffer _allLights;
     private readonly StructuredBuffer _noEnvironment;
 
+    // ETERVALE_H700_LAZY_SURFACES_MARKER
+    // Alocacoes Vulkan ficam no game thread. Nunca inicializar Effects num Task.Run.
+    private readonly bool _h700LazySurfaces;
+    private readonly ContentManager _h700Content;
+    private readonly IClientLog _h700Log;
+    private readonly Texture2D _h700Neutral;
+    private FrameConstants _h700LastFrame;
+    private bool _h700HasFrame;
+    private Matrix _h700LastCasterViewProjection;
+    private uint _h700LastCasterRenderTime;
+    private Vector4 _h700LastCasterLight;
+    private bool _h700HasCaster;
+
+    private void H700InitDeferred(SurfaceEffect surface)
+    {
+        if (_h700HasFrame)
+            surface.ApplyFrame(_h700LastFrame, _lightPositions, _lightColors, _cascades);
+        if (_h700HasCaster)
+            surface.ApplyCasterFrame(_h700LastCasterViewProjection,
+                VertexAnimationSeconds(_h700LastCasterRenderTime), _h700LastCasterLight);
+    }
+
+    private void H700EnsureSkinned()
+    {
+        if (_skinned is not null) return;
+        System.Console.WriteLine("[H700 LAZY SHADER] LOAD SkinnedSurface sob pedido");
+        _skinned = new SurfaceEffect(LoadRequired(_h700Content, SkinnedSurfaceAsset, _h700Log),
+            ShaderVertexFactory.Skinned, _h700Neutral, _allLights, _noEnvironment);
+        H700InitDeferred(_skinned);
+        System.Console.WriteLine("[H700 LAZY SHADER] READY SkinnedSurface");
+    }
+
+    private void H700EnsureGltf()
+    {
+        if (_gltf is not null) return;
+        System.Console.WriteLine("[H700 LAZY SHADER] LOAD GltfSurface sob pedido");
+        _gltf = new SurfaceEffect(LoadRequired(_h700Content, GltfSurfaceAsset, _h700Log),
+            ShaderVertexFactory.Gltf, _h700Neutral, _allLights, _noEnvironment);
+        H700InitDeferred(_gltf);
+        System.Console.WriteLine("[H700 LAZY SHADER] READY GltfSurface");
+    }
+
     // neutral: a 1x1 white texture bound to every slot before its first use; a Vulkan draw never samples an unbound slot.
     public PristonShaderLibrary(ContentManager content, IClientLog log, Texture2D neutral)
     {
+        _h700Content = content;
+        _h700Log = log;
+        _h700Neutral = neutral;
+        _h700LazySurfaces = System.Environment.GetEnvironmentVariable("ETERVALE_H700_LAZY_SURFACES") == "1";
         // Bound where no tile masks exist; TileParams.z = 0 then makes every light count.
+        H700ShaderTrace("inicio construtor SurfaceLibrary");
         _allLights = new StructuredBuffer(neutral.GraphicsDevice, sizeof(uint), 1, BufferShaderAccess.ReadWrite);
         _noEnvironment = new StructuredBuffer(neutral.GraphicsDevice, 16, PristonEnvironmentLighting.ShEntries, BufferShaderAccess.ReadWrite);
+        H700ShaderTrace("depois buffers iniciais");
         _static = new SurfaceEffect(LoadRequired(content, StaticSurfaceAsset, log), ShaderVertexFactory.Static, neutral, _allLights, _noEnvironment);
-        _skinned = new SurfaceEffect(LoadRequired(content, SkinnedSurfaceAsset, log), ShaderVertexFactory.Skinned, neutral, _allLights, _noEnvironment);
-        _gltf = new SurfaceEffect(LoadRequired(content, GltfSurfaceAsset, log), ShaderVertexFactory.Gltf, neutral, _allLights, _noEnvironment);
+        H700ShaderTrace("depois StaticSurface");
+        if (!_h700LazySurfaces)
+            _skinned = new SurfaceEffect(LoadRequired(content, SkinnedSurfaceAsset, log), ShaderVertexFactory.Skinned, neutral, _allLights, _noEnvironment);
+        else
+            System.Console.WriteLine("[H700 LAZY SHADER] DEFER SkinnedSurface");
+        H700ShaderTrace("estado SkinnedSurface (pode estar adiado)");
+        if (!_h700LazySurfaces)
+            _gltf = new SurfaceEffect(LoadRequired(content, GltfSurfaceAsset, log), ShaderVertexFactory.Gltf, neutral, _allLights, _noEnvironment);
+        else
+            System.Console.WriteLine("[H700 LAZY SHADER] DEFER GltfSurface");
+        H700ShaderTrace("estado GltfSurface (pode estar adiado)");
         if (Environment.GetEnvironmentVariable("ETV_FOREST_RENDERER") == "INSTANCED")
             _forestInstanced = new SurfaceEffect(LoadRequired(content, "Effects/ForestInstanced", log),
                 ShaderVertexFactory.Gltf, neutral, _allLights, _noEnvironment);
     }
 
     // Material texture parameter changes since BeginFrame (identical rebinds are skipped and not counted).
-    public int TextureChanges => _static.TextureChanges + _skinned.TextureChanges + _gltf.TextureChanges + (_forestInstanced?.TextureChanges ?? 0);
+    public int TextureChanges => _static.TextureChanges + (_skinned?.TextureChanges ?? 0) + (_gltf?.TextureChanges ?? 0) + (_forestInstanced?.TextureChanges ?? 0);
 
     public void BeginFrame()
     {
         _static.TextureChanges = 0;
-        _skinned.TextureChanges = 0;
-        _gltf.TextureChanges = 0;
+        if (_skinned is not null) _skinned.TextureChanges = 0;
+        if (_gltf is not null) _gltf.TextureChanges = 0;
         if (_forestInstanced is not null) _forestInstanced.TextureChanges = 0;
     }
 
@@ -97,9 +165,11 @@ internal sealed class PristonShaderLibrary : IDisposable
 
         var constants = new FrameConstants(frame, count, Math.Min(frame.Lighting.TransientLightCount, count));
         FillCascades(frame);
+        _h700LastFrame = constants;
+        _h700HasFrame = true;
         _static.ApplyFrame(constants, _lightPositions, _lightColors, _cascades);
-        _skinned.ApplyFrame(constants, _lightPositions, _lightColors, _cascades);
-        _gltf.ApplyFrame(constants, _lightPositions, _lightColors, _cascades);
+        _skinned?.ApplyFrame(constants, _lightPositions, _lightColors, _cascades);
+        _gltf?.ApplyFrame(constants, _lightPositions, _lightColors, _cascades);
         _forestInstanced?.ApplyFrame(constants, _lightPositions, _lightColors, _cascades);
     }
 
@@ -148,10 +218,14 @@ internal sealed class PristonShaderLibrary : IDisposable
     // casterLight: a lamp's position and 1 / radius for its cube faces; zero for the sun's cascades.
     public void ApplyShadowFrame(Matrix viewProjection, uint renderTimeMs, Vector4 casterLight = default)
     {
+        _h700LastCasterViewProjection = viewProjection;
+        _h700LastCasterRenderTime = renderTimeMs;
+        _h700LastCasterLight = casterLight;
+        _h700HasCaster = true;
         var animationTime = VertexAnimationSeconds(renderTimeMs);
         _static.ApplyCasterFrame(viewProjection, animationTime, casterLight);
-        _skinned.ApplyCasterFrame(viewProjection, animationTime, casterLight);
-        _gltf.ApplyCasterFrame(viewProjection, animationTime, casterLight);
+        _skinned?.ApplyCasterFrame(viewProjection, animationTime, casterLight);
+        _gltf?.ApplyCasterFrame(viewProjection, animationTime, casterLight);
         _forestInstanced?.ApplyCasterFrame(viewProjection, animationTime, casterLight);
     }
 
@@ -194,6 +268,7 @@ internal sealed class PristonShaderLibrary : IDisposable
         float wobblePhase = 0f,
         bool actor = false)
     {
+        H700EnsureSkinned();
         _skinned.SetBonePalette(palette);
         _skinned.SetDrawLight(floorLight);
         var overlay = shade?.Overlay;
@@ -207,6 +282,7 @@ internal sealed class PristonShaderLibrary : IDisposable
     // Surface.fx OutlineParams, color display-referred with its strength in w.
     public Effect SelectSkinnedOutline(bool masked, Vector4 parameters, Vector4 color)
     {
+        H700EnsureSkinned();
         _skinned.ApplyOutline(parameters, color);
         return _skinned.Select(masked ? _skinned.OutlineMasked : _skinned.Outline);
     }
@@ -220,6 +296,7 @@ internal sealed class PristonShaderLibrary : IDisposable
 
     public Effect SelectSkinnedShadow(PristonMaterialRuntime material, Texture2D texture, PristonSkinPalette palette, Vector2 uvScrollOffset)
     {
+        H700EnsureSkinned();
         _skinned.SetBonePalette(palette);
         _skinned.ApplyCaster(material.AlphaTest ? texture : null, uvScrollOffset);
         return _skinned.Select(material.AlphaTest ? _skinned.CasterMasked : _skinned.Caster);
@@ -238,6 +315,7 @@ internal sealed class PristonShaderLibrary : IDisposable
         float wobblePhase = 0f,
         bool actor = false)
     {
+        H700EnsureGltf();
         _gltf.SetBonePalette(palette);
         _gltf.SetDrawLight(floorLight);
         _gltf.ApplyGltfMaterial(material, rimColor);
@@ -271,12 +349,14 @@ internal sealed class PristonShaderLibrary : IDisposable
     // The hover outline of a glTF batch SelectGltfSurface just set up.
     public Effect SelectGltfOutline(bool masked, Vector4 parameters, Vector4 color)
     {
+        H700EnsureGltf();
         _gltf.ApplyOutline(parameters, color);
         return _gltf.Select(masked ? _gltf.OutlineMasked : _gltf.Outline);
     }
 
     public Effect SelectGltfShadow(GltfMaterialRuntime material, PristonSkinPalette palette)
     {
+        H700EnsureGltf();
         _gltf.SetBonePalette(palette);
         _gltf.ApplyGltfMaterial(material, Vector3.Zero);
         return _gltf.Select(material.Queue.AlphaTest ? _gltf.CasterMasked : _gltf.Caster);
@@ -285,17 +365,20 @@ internal sealed class PristonShaderLibrary : IDisposable
     public void Dispose()
     {
         _static.Dispose();
-        _skinned.Dispose();
-        _gltf.Dispose();
+        _skinned?.Dispose();
+        _gltf?.Dispose();
         _forestInstanced?.Dispose();
     }
 
     internal static Effect LoadRequired(ContentManager content, string assetName, IClientLog log)
     {
+        var h700Start = System.Diagnostics.Stopwatch.GetTimestamp();
+        H700ShaderTrace($"BEGIN {assetName}");
         Effect effect;
         try
         {
             effect = content.Load<Effect>(assetName);
+            H700ShaderTrace($"LOADED {assetName} {System.Diagnostics.Stopwatch.GetElapsedTime(h700Start).TotalMilliseconds:F1} ms");
         }
         catch (ContentLoadException exception)
         {
@@ -316,7 +399,11 @@ internal sealed class PristonShaderLibrary : IDisposable
 
         // The content manager hands every caller the same instance. Each owner keeps its own copy so the parameter caches
         // (which skip unchanged values) never meet values another screen's renderer left in the shared effect.
-        return effect.Clone();
+        var h700CloneStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        H700ShaderTrace($"CLONE BEGIN {assetName}");
+        var h700Clone = effect.Clone();
+        H700ShaderTrace($"CLONE DONE {assetName} {System.Diagnostics.Stopwatch.GetElapsedTime(h700CloneStart).TotalMilliseconds:F1} ms");
+        return h700Clone;
     }
 
     // Values shared by both surface effects for one frame, computed once.

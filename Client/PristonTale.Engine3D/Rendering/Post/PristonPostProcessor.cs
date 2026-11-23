@@ -29,8 +29,26 @@ internal sealed class PristonPostProcessor : IDisposable
     private readonly EffectParameter _toneParams;
     private readonly EffectParameter _debugParams;
     private readonly EffectParameter _mesopicParams;
-    private readonly PristonBloom _bloom;
-    private readonly PristonSmaa _smaa;
+    private PristonBloom _bloom;
+    private PristonSmaa _smaa;
+    // ETERVALE_H700_LOW_FX_MARKER
+    private readonly bool _h700LowFx;
+    private readonly ContentManager _h700Content;
+
+    private void H700EnsureBloom()
+    {
+        if (_bloom is not null) return;
+        System.Console.WriteLine("[H700 LOWFX] LOAD Bloom por necessidade");
+        _bloom = new PristonBloom(_device, _triangle, PristonShaderLibrary.LoadRequired(_h700Content, PristonBloom.Asset, _log));
+    }
+
+    private void H700EnsureSmaa()
+    {
+        if (_smaa is not null) return;
+        System.Console.WriteLine("[H700 LOWFX] LOAD SMAA por necessidade");
+        _smaa = new PristonSmaa(_device, _triangle, PristonShaderLibrary.LoadRequired(_h700Content, PristonSmaa.Asset, _log));
+    }
+
     private RenderTarget2D _ldrTarget;
     private Texture2D _lutTexture;
     private string _lutSource;
@@ -40,10 +58,24 @@ internal sealed class PristonPostProcessor : IDisposable
 
     public PristonPostProcessor(GraphicsDevice device, ContentManager content, IClientLog log, PristonFullscreenTriangle triangle)
     {
+        // ETERVALE_H700_TRACE_SCENE_MARKER
+        void TraceH700Scene(string stage)
+        {
+            if (System.Environment.GetEnvironmentVariable("ETERVALE_H700_TRACE_SCENE") != "1")
+                return;
+            using var proc = System.Diagnostics.Process.GetCurrentProcess();
+            var rss = proc.WorkingSet64 / 1048576;
+            var heap = System.GC.GetTotalMemory(false) / 1048576;
+            System.Console.WriteLine($"[H700 POST] {stage}; RSS={rss} MiB; heap={heap} MiB");
+        }
+        TraceH700Scene("inicio");
         _device = device;
         _log = log;
         _triangle = triangle;
+        _h700Content = content;
+        _h700LowFx = System.Environment.GetEnvironmentVariable("ETERVALE_H700_LOW_FX") == "1";
         _final = PristonShaderLibrary.LoadRequired(content, FinalAsset, log);
+        TraceH700Scene("01 PostFinal FX");
         _tonemap = _final.Techniques["Tonemap"];
         _fxaa = _final.Techniques["Fxaa"];
         _scene = _final.Parameters["Scene"];
@@ -56,9 +88,18 @@ internal sealed class PristonPostProcessor : IDisposable
         _toneParams = _final.Parameters["ToneParams"];
         _debugParams = _final.Parameters["DebugParams"];
         _mesopicParams = _final.Parameters["MesopicParams"];
-        _bloom = new PristonBloom(device, triangle, PristonShaderLibrary.LoadRequired(content, PristonBloom.Asset, log));
-        _smaa = new PristonSmaa(device, triangle, PristonShaderLibrary.LoadRequired(content, PristonSmaa.Asset, log));
+        if (!_h700LowFx)
+            _bloom = new PristonBloom(device, triangle, PristonShaderLibrary.LoadRequired(content, PristonBloom.Asset, log));
+        else
+            System.Console.WriteLine("[H700 LOWFX] DEFER Bloom");
+        TraceH700Scene("02 Bloom FX");
+        if (!_h700LowFx)
+            _smaa = new PristonSmaa(device, triangle, PristonShaderLibrary.LoadRequired(content, PristonSmaa.Asset, log));
+        else
+            System.Console.WriteLine("[H700 LOWFX] DEFER SMAA");
+        TraceH700Scene("03 SMAA FX + tabelas");
         Exposure = new PristonAutoExposure(device, PristonShaderLibrary.LoadRequired(content, PristonAutoExposure.Asset, log));
+        TraceH700Scene("04 AutoExposure FX + buffers");
     }
 
     public PristonAutoExposure Exposure { get; }
@@ -88,6 +129,7 @@ internal sealed class PristonPostProcessor : IDisposable
         Profiler?.Begin(RenderSection.Bloom);
         if (bloomStrength > 0f)
         {
+            H700EnsureBloom();
             _bloom.Run(scene);
         }
 
@@ -128,6 +170,7 @@ internal sealed class PristonPostProcessor : IDisposable
         Profiler?.Begin(RenderSection.PostAntiAliasing);
         if (settings.AntiAliasing == AntiAliasingMode.Smaa)
         {
+            H700EnsureSmaa();
             _smaa.Apply(_ldrTarget, bindOutput);
         }
         else
@@ -213,8 +256,8 @@ internal sealed class PristonPostProcessor : IDisposable
 
     public void Dispose()
     {
-        _bloom.Dispose();
-        _smaa.Dispose();
+        _bloom?.Dispose();
+        _smaa?.Dispose();
         Exposure.Dispose();
         _ldrTarget?.Dispose();
         _lutTexture?.Dispose();

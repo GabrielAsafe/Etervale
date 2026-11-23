@@ -284,6 +284,8 @@ class NativeGamePlatform : GamePlatform
                 }
             }
         }
+        // ETERVALE_H700_EVDEV_V1: SDL dummy nao recebe evdev por si so.
+        H700EvdevInput.Poll(_window);
     }
 
     private bool ShouldExit()

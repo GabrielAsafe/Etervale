@@ -88,11 +88,23 @@ internal sealed class OpeningCinematic : IDisposable
         {
             _effects = new VfxRenderer(graphicsDevice, content);
         }
+        H700TraceOpening("antes do construtor PristonRenderer");
         _renderer = new PristonRenderer(graphicsDevice, content, log, presentation)
         {
             Sky = sky,
             SkyProfiles = PristonSkyProfiles.Opening
         };
+        H700TraceOpening("depois do construtor PristonRenderer");
+    }
+
+    private static void H700TraceOpening(string stage)
+    {
+        if (Environment.GetEnvironmentVariable("ETERVALE_H700_TRACE_MEM") != "1")
+            return;
+        using var process = System.Diagnostics.Process.GetCurrentProcess();
+        var rss = process.WorkingSet64 / (1024 * 1024);
+        var heap = GC.GetTotalMemory(false) / (1024 * 1024);
+        ConsoleClientLog.Instance.Info($"[H700 OPENING] {stage}; RSS={rss} MiB; heap={heap} MiB");
     }
 
     public bool IsOver => _pathTicks >= CinemaEndTicks;
@@ -103,7 +115,9 @@ internal sealed class OpeningCinematic : IDisposable
 
     public void Load()
     {
+        H700TraceOpening("inicio OpeningCinematic.Load");
         var stage = _reader.ReadStage(_assetPath(StagePath));
+        H700TraceOpening("depois ReadStage");
         // The original opening stage references Ricarten's texture names, while the
         // SMD itself is in StartImage/Opening/Map. Prefer an opening-local texture;
         // only this scene's map materials may fall back to Field/Ricarten.
@@ -122,8 +136,24 @@ internal sealed class OpeningCinematic : IDisposable
             _terrainFire = new MeteorEffects(new SystemScriptEffects(_effectSystem, _effectLibrary.Vfx.Library), _renderer.TransientLights, collision);
         }
         _renderer.ConfigureFieldLighting(intensity: 4f, rangeScale: 1f, overrideLights: null, glowIntensity: 1f, glowScale: 1f);
-        _renderer.AddStage(stage, LoadScenery());
-        LoadOpeningNpcs();
+        H700TraceOpening("antes AddStage / LoadScenery");
+        // ETERVALE_H700_LITE_V1_MARKER
+        if (System.Environment.GetEnvironmentVariable("ETERVALE_H700_LITE") == "1")
+        {
+            _log.Info("[H700 LITE] Somente terreno de abertura: sem decoracao nem NPCs.");
+            _renderer.AddStage(stage, System.Array.Empty<PristonSceneryInstance>());
+            _log.Info("[H700 LITE] Terreno carregado.");
+        }
+        else
+        {
+            _renderer.AddStage(stage, LoadScenery());
+        }
+        H700TraceOpening("depois AddStage / LoadScenery");
+        if (System.Environment.GetEnvironmentVariable("ETERVALE_H700_LITE") != "1")
+            LoadOpeningNpcs();
+        else
+            _log.Info("[H700 LITE] SKIP NPCs da abertura.");
+        H700TraceOpening("depois LoadOpeningNpcs");
 
         _renderer.SetTimeOfDay(11f);
         _renderer.DayLengthSeconds = 0f;

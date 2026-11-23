@@ -116,13 +116,16 @@ public sealed record ClientSettings
     public ClientSettings Validate(IClientLog log)
     {
         var defaults = new ClientSettings();
+        // ETERVALE_H700_RESOLUTION_V1: unica excecao abaixo de 800x600 e o painel H700.
+        var h700Native = System.Environment.GetEnvironmentVariable("ETERVALE_H700_LITE") == "1"
+            && WindowWidth == 640 && WindowHeight == 480;
         var valid = this with
         {
             ServerAddress = string.IsNullOrWhiteSpace(ServerAddress) ? defaults.ServerAddress : ServerAddress,
             Language = NormalizeLanguage(Language),
             Monitor = Monitor >= -1 ? Monitor : defaults.Monitor,
-            WindowWidth = WindowWidth is >= 800 and <= 16384 ? WindowWidth : defaults.WindowWidth,
-            WindowHeight = WindowHeight is >= 600 and <= 16384 ? WindowHeight : defaults.WindowHeight,
+            WindowWidth = h700Native || WindowWidth is >= 800 and <= 16384 ? WindowWidth : defaults.WindowWidth,
+            WindowHeight = h700Native || WindowHeight is >= 600 and <= 16384 ? WindowHeight : defaults.WindowHeight,
             WindowMode = Enum.IsDefined(WindowMode) ? WindowMode : defaults.WindowMode,
             RefreshRate = RefreshRate is >= 0 and <= 1000 ? RefreshRate : defaults.RefreshRate,
             MaxFps = IsValidFps(MaxFps) ? MaxFps : defaults.MaxFps,

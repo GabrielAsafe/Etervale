@@ -26,6 +26,16 @@ public sealed class OpeningScreen : GameScreen
 
     public override void Enter()
     {
+        // Handheld-only: establish a usable login before allocating any 3D renderer.
+        if (System.Environment.GetEnvironmentVariable("ETERVALE_H700_DIRECT_LOGIN") == "1")
+        {
+            _audio = LoginAudio.Opening(Context.Audio);
+            _loginController = new OpeningLoginController(Context, _audio);
+            _loginRevealed = true;
+            _status = "H700 login 2D";
+            Context.Log.Info("[H700 LOGIN] Login 2D ativo; renderer e cinematica adiados.");
+            return;
+        }
         _cinematic = new OpeningCinematic(
             Context.GraphicsDevice,
             Context.Content,
@@ -46,7 +56,7 @@ public sealed class OpeningScreen : GameScreen
         var dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
         _audio.Update(dt);
 
-        _cinematic.Update(gameTime);
+        _cinematic?.Update(gameTime);
 
         var keyboard = Keyboard.GetState();
         if (Context.Presentation.AwaitingConfirmation)
@@ -57,7 +67,7 @@ public sealed class OpeningScreen : GameScreen
 
         if (!_loginRevealed)
         {
-            if (AnyKeyPressed(keyboard, _lastKeyboard) || _cinematic.IsOver)
+            if (AnyKeyPressed(keyboard, _lastKeyboard) || _cinematic?.IsOver == true)
                 _loginRevealed = true;
         }
         else if (_loginController.Update(keyboard, _lastKeyboard, dt) == OpeningLoginController.LoginResult.Succeeded)
@@ -78,7 +88,10 @@ public sealed class OpeningScreen : GameScreen
 
     public override void Draw()
     {
-        _cinematic.Draw();
+        if (_cinematic is null)
+            Context.GraphicsDevice.Clear(new Color(16, 36, 70));
+        else
+            _cinematic.Draw();
 
         var viewport = Context.GraphicsDevice.Viewport;
         if (!_loginRevealed)

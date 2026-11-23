@@ -795,7 +795,13 @@ static mgbyte MGP_Window_CreateNativeWindowInternal(
 	Uint32 flags = SDL_WINDOW_HIDDEN;// | SDL_WINDOW_FULLSCREEN_DESKTOP;
 
 #if defined(MG_VULKAN) || defined(MG_DIRECTX12)
-	flags |= SDL_WINDOW_VULKAN;
+    // ETERVALE_H700_DIRECT_DISPLAY: SDL dummy provides events/window handle;
+    // Vulkan creates a direct-display surface independently of SDL WSI.
+#if defined(__linux__)
+    const char* h700 = std::getenv("MG_H700_DIRECT_DISPLAY");
+    if (!(h700 && h700[0] == '1' && h700[1] == '\0'))
+#endif
+        flags |= SDL_WINDOW_VULKAN;
 #elif defined(MG_OPENGL)
 
     if (!MGP_Window_DetectOpenGLVersion(window->contextMajorVersion, window->contextMinorVersion))

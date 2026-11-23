@@ -72,6 +72,9 @@ public sealed partial class PristonRenderer : IDisposable
     private readonly PristonGpuMeshBuilder _meshBuilder;
     private readonly BatchUploader _batchUploader;
     private RenderTarget2D _shadowMap;
+    // ETERVALE_H700_LOW_FX_MARKER
+    private readonly bool _h700LowFx;
+    private readonly ContentManager _h700FxContent;
     private readonly PresentationSettings _presentation;
     private readonly PristonSceneTargets _sceneTargets;
     private int _multiSampleCount;
@@ -123,14 +126,14 @@ public sealed partial class PristonRenderer : IDisposable
     private Vector3 _shadowLightDirection;
     private PristonScreenOcclusion _screenOcclusion;
     private readonly PristonLampShadows _lampShadows;
-    private readonly PristonLightCulling _lightCulling;
-    private readonly PristonEnvironmentLighting _environment;
-    private readonly PristonScreenReflections _reflections;
+    private PristonLightCulling _lightCulling;
+    private PristonEnvironmentLighting _environment;
+    private PristonScreenReflections _reflections;
     private bool _screenReflections = true;
     private PristonFrameContext _reflectionFrame;
     private PristonCalibrationSpheres _calibration;
     private bool _calibrationSpheres;
-    private readonly PristonVolumetricLight _volumetric;
+    private PristonVolumetricLight _volumetric;
     private bool _volumetricLight = true;
     private bool _imageBasedLighting = true;
     private int _lampShadowRedraw;
@@ -150,6 +153,8 @@ public sealed partial class PristonRenderer : IDisposable
     private int _shadowDrawCalls;
     private int _lampShadowMapsUpdated;
 
+    // ETERVALE_H700_LITE_V1_MARKER
+    private readonly bool _h700Lite;
     private readonly GlowRenderer _glowRenderer;
     private readonly PristonSkyCapture _skyCapture;
     private Vector3 _towardSun = Vector3.Up;
@@ -178,32 +183,125 @@ public sealed partial class PristonRenderer : IDisposable
         _graphicsDevice = graphicsDevice;
         _log = log ?? ConsoleClientLog.Instance;
         _presentation = presentation;
+        _h700Lite = System.Environment.GetEnvironmentVariable("ETERVALE_H700_LITE") == "1";
+        _h700LowFx = System.Environment.GetEnvironmentVariable("ETERVALE_H700_LOW_FX") == "1";
+        _h700FxContent = content;
+        void H700Stage(string stage)
+        {
+            if (System.Environment.GetEnvironmentVariable("ETERVALE_H700_TRACE_RENDERER") != "1")
+                return;
+            using var process = System.Diagnostics.Process.GetCurrentProcess();
+            var rss = process.WorkingSet64 / (1024 * 1024);
+            var heap = System.GC.GetTotalMemory(false) / (1024 * 1024);
+            _log.Info($"[H700 RENDER] {stage}; RSS={rss} MiB; heap={heap} MiB");
+        }
+
+        H700Stage("01 state cache");
         _stateCache = new PristonRenderStateCache(graphicsDevice);
+        H700Stage("02 texture loader");
         _textureLoader = new PristonTextureLoader(graphicsDevice, _log);
+        H700Stage("03 texture initialize");
         _textureLoader.Initialize();
+        H700Stage("04 shader library");
         _shaders = new PristonShaderLibrary(content, _log, _textureLoader.White);
+        H700Stage("05 scene targets / post");
         _sceneTargets = new PristonSceneTargets(graphicsDevice, content, _log);
+        H700Stage("06 material factory");
         _materialFactory = new PristonMaterialRuntimeFactory(_textureLoader);
+        H700Stage("07 mesh builder");
         _meshBuilder = new PristonGpuMeshBuilder(graphicsDevice);
+        H700Stage("08 batch uploader");
         _batchUploader = new BatchUploader(graphicsDevice);
-        _glowRenderer = new GlowRenderer(graphicsDevice, content, _log);
+        H700Stage("09 glow renderer");
+        if (!_h700Lite)
+            _glowRenderer = new GlowRenderer(graphicsDevice, content, _log);
+        else
+            System.Console.WriteLine("[H700 LITE] SKIP GlowRenderer (Effects/Unlit)");
+        H700Stage("10 sky capture");
         _skyCapture = new PristonSkyCapture(graphicsDevice);
+        H700Stage("11 lamp shadows");
         _lampShadows = new PristonLampShadows(graphicsDevice, _log);
-        _environment = new PristonEnvironmentLighting(graphicsDevice, _sceneTargets.Triangle,
-            PristonShaderLibrary.LoadRequired(content, PristonEnvironmentLighting.Asset, _log));
-        _reflections = new PristonScreenReflections(graphicsDevice, _sceneTargets.Triangle,
-            PristonShaderLibrary.LoadRequired(content, PristonScreenReflections.Asset, _log));
-        _volumetric = new PristonVolumetricLight(graphicsDevice, _sceneTargets.Triangle,
-            PristonShaderLibrary.LoadRequired(content, PristonVolumetricLight.Asset, _log));
-        _lightCulling = new PristonLightCulling(graphicsDevice, PristonShaderLibrary.LoadRequired(content, PristonLightCulling.Asset, _log));
-        _screenOcclusion = new PristonScreenOcclusion(graphicsDevice, _sceneTargets.Triangle,
-            PristonShaderLibrary.LoadRequired(content, PristonScreenOcclusion.Asset, _log));
-        _physicalSky = new PristonPhysicalSky(graphicsDevice, content, _sceneTargets.Triangle, _log);
+        H700Stage("12 environment");
+        if (!_h700LowFx)
+            _environment = new PristonEnvironmentLighting(graphicsDevice, _sceneTargets.Triangle,
+                PristonShaderLibrary.LoadRequired(content, PristonEnvironmentLighting.Asset, _log));
+        else
+            System.Console.WriteLine("[H700 LOWFX] DEFER Environment");
+        H700Stage("13 reflections");
+        if (!_h700LowFx)
+            _reflections = new PristonScreenReflections(graphicsDevice, _sceneTargets.Triangle,
+                PristonShaderLibrary.LoadRequired(content, PristonScreenReflections.Asset, _log));
+        else
+            System.Console.WriteLine("[H700 LOWFX] DEFER Reflections");
+        H700Stage("14 volumetric");
+        if (!_h700LowFx)
+            _volumetric = new PristonVolumetricLight(graphicsDevice, _sceneTargets.Triangle,
+                PristonShaderLibrary.LoadRequired(content, PristonVolumetricLight.Asset, _log));
+        else
+            System.Console.WriteLine("[H700 LOWFX] DEFER Volumetric");
+        H700Stage("15 light culling");
+        if (!_h700LowFx)
+            _lightCulling = new PristonLightCulling(graphicsDevice, PristonShaderLibrary.LoadRequired(content, PristonLightCulling.Asset, _log));
+        else
+            System.Console.WriteLine("[H700 LOWFX] DEFER LightCull");
+        H700Stage("16 screen occlusion");
+        if (!_h700LowFx)
+            _screenOcclusion = new PristonScreenOcclusion(graphicsDevice, _sceneTargets.Triangle,
+                PristonShaderLibrary.LoadRequired(content, PristonScreenOcclusion.Asset, _log));
+        else
+            System.Console.WriteLine("[H700 LOWFX] DEFER ScreenOcclusion");
+        H700Stage("17 physical sky / 3D noise");
+        if (!_h700LowFx)
+            _physicalSky = new PristonPhysicalSky(graphicsDevice, content, _sceneTargets.Triangle, _log);
+        else
+            System.Console.WriteLine("[H700 LOWFX] DEFER PhysicalSky");
+        H700Stage("18 quality / shadow map");
         ApplyQuality(presentation?.Rendering ?? new ClientSettings());
+        H700Stage("19 renderer constructor pronto");
         if (_presentation is not null)
         {
             _presentation.RenderingChanged += ApplyQuality;
         }
+    }
+
+    private void H700EnsureEnvironment()
+    {
+        if (_environment is not null) return;
+        System.Console.WriteLine("[H700 LOWFX] LOAD Environment por necessidade");
+        _environment = new PristonEnvironmentLighting(_graphicsDevice, _sceneTargets.Triangle,
+            PristonShaderLibrary.LoadRequired(_h700FxContent, PristonEnvironmentLighting.Asset, _log));
+    }
+
+    private void H700EnsureReflections()
+    {
+        if (_reflections is not null) return;
+        System.Console.WriteLine("[H700 LOWFX] LOAD Reflections por necessidade");
+        _reflections = new PristonScreenReflections(_graphicsDevice, _sceneTargets.Triangle,
+            PristonShaderLibrary.LoadRequired(_h700FxContent, PristonScreenReflections.Asset, _log));
+    }
+
+    private void H700EnsureVolumetric()
+    {
+        if (_volumetric is not null) return;
+        System.Console.WriteLine("[H700 LOWFX] LOAD Volumetric por necessidade");
+        _volumetric = new PristonVolumetricLight(_graphicsDevice, _sceneTargets.Triangle,
+            PristonShaderLibrary.LoadRequired(_h700FxContent, PristonVolumetricLight.Asset, _log));
+    }
+
+    private void H700EnsureLightCulling()
+    {
+        if (_lightCulling is not null) return;
+        System.Console.WriteLine("[H700 LOWFX] LOAD LightCull por necessidade");
+        _lightCulling = new PristonLightCulling(_graphicsDevice,
+            PristonShaderLibrary.LoadRequired(_h700FxContent, PristonLightCulling.Asset, _log));
+    }
+
+    private void H700EnsureScreenOcclusion()
+    {
+        if (_screenOcclusion is not null) return;
+        System.Console.WriteLine("[H700 LOWFX] LOAD ScreenOcclusion por necessidade");
+        _screenOcclusion = new PristonScreenOcclusion(_graphicsDevice, _sceneTargets.Triangle,
+            PristonShaderLibrary.LoadRequired(_h700FxContent, PristonScreenOcclusion.Asset, _log));
     }
 
     private void ApplyQuality(ClientSettings settings)
@@ -540,7 +638,7 @@ public sealed partial class PristonRenderer : IDisposable
         var visibleStaticMeshDiagnostics = new PristonMeshDiagnostics();
         var temporal = _postSettings.AntiAliasing == AntiAliasingMode.Taa && DebugView != PristonDebugView.Overdraw;
         // The depth pre-pass pays for itself: the lit pass shades each pixel once and the light tiles get depth bounds.
-        var prepass = _multiSampleCount == 0 && DebugView != PristonDebugView.Overdraw;
+        var prepass = !_h700Lite && _multiSampleCount == 0 && DebugView != PristonDebugView.Overdraw;
         // Binding the scene target ends the caller's render pass, so the profiler can reset its timestamps outside one.
         _sceneTargets.Begin(_multiSampleCount, temporal, prepass);
         // M1.4.3 GPU timings are opt-in and only started on the rendering thread.
@@ -678,6 +776,7 @@ public sealed partial class PristonRenderer : IDisposable
         frame = frame with { FogSky = PrepareFogSky(frame, skyVisible, skyPosition) };
         if (_imageBasedLighting && DebugView != PristonDebugView.Overdraw)
         {
+            H700EnsureEnvironment();
             if (_environment.ShouldRefresh(_renderTime))
             {
                 Profiler.Begin(RenderSection.Environment);
@@ -689,7 +788,7 @@ public sealed partial class PristonRenderer : IDisposable
         }
         else
         {
-            frame = frame with { Environment = new PristonEnvironmentFrame(null, null, _environment.BrdfLut) };
+            frame = frame with { Environment = new PristonEnvironmentFrame(null, null, _environment?.BrdfLut ?? _textureLoader.White) };
         }
 
         Profiler.Begin(RenderSection.Sky);
@@ -732,6 +831,7 @@ public sealed partial class PristonRenderer : IDisposable
             var contact = _contactShadows && sunShadowsEnabled && SunLights;
             if (_ambientOcclusion || contact)
             {
+                H700EnsureScreenOcclusion();
                 Profiler.Begin(RenderSection.AmbientOcclusion);
                 var occlusion = _screenOcclusion.Run(
                     _sceneTargets.LinearDepth,
@@ -752,8 +852,9 @@ public sealed partial class PristonRenderer : IDisposable
             _prepassDrawn = true;
         }
 
-        if (lighting.PointLights.Count > 0)
+        if (lighting.PointLights.Count > 0 && !_h700Lite)
         {
+            H700EnsureLightCulling();
             Profiler.Begin(RenderSection.LightCulling);
             var near = PristonDepth.NearPlane(frame.Projection);
             var far = PristonDepth.FarPlane(frame.Projection);
@@ -808,11 +909,12 @@ public sealed partial class PristonRenderer : IDisposable
         }
 
         Profiler.Begin(RenderSection.Glow);
-        _glowRenderer.Draw(frame, _frameGlowLights, _lampFactor);
+        _glowRenderer?.Draw(frame, _frameGlowLights, _lampFactor);
         Profiler.End(RenderSection.Glow);
         // Shafts of the sun only: the moon's are too faint to pay for.
         if (_prepassDrawn && _volumetricLight && sunShadowsEnabled && SunLights)
         {
+            H700EnsureVolumetric();
             Profiler.Begin(RenderSection.Volumetric);
             // The march stops where the distance fog starts, which covers the medium beyond.
             _volumetric.Run(
@@ -996,16 +1098,16 @@ public sealed partial class PristonRenderer : IDisposable
         _shadowMap.Dispose();
         DisposeInstancedForestGroups();
         Profiler.Dispose();
-        _glowRenderer.Dispose();
+        _glowRenderer?.Dispose();
         _skyCapture.Dispose();
         _sceneTargets.Dispose();
-        _screenOcclusion.Dispose();
+        _screenOcclusion?.Dispose();
         _lampShadows.Dispose();
-        _lightCulling.Dispose();
-        _environment.Dispose();
-        _reflections.Dispose();
-        _volumetric.Dispose();
-        _physicalSky.Dispose();
+        _lightCulling?.Dispose();
+        _environment?.Dispose();
+        _reflections?.Dispose();
+        _volumetric?.Dispose();
+        _physicalSky?.Dispose();
         _shaders.Dispose();
         _textureLoader.Dispose();
         _disposed = true;

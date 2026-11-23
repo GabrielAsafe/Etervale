@@ -29,6 +29,8 @@
 #include <vector>
 #include <thread>
 #include <string>
+#include <cstdlib>
+#include <cstring>
 
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #define VULKAN_HPP_NO_EXCEPTIONS
@@ -959,6 +961,111 @@ static bool SupportsExtension(const std::vector<VkExtensionProperties>& supporte
 	return false;
 }
 
+// ETERVALE_H700_DIRECT_DISPLAY: opt-in fbdev/VR display path for H700.
+// Works with SDL_VIDEODRIVER=dummy. It intentionally does not touch desktop WSI.
+static bool MGVK_H700DirectDisplayEnabled()
+{
+#if defined(__linux__)
+    const char* flag = std::getenv("MG_H700_DIRECT_DISPLAY");
+    return flag != nullptr && flag[0] == '1' && flag[1] == '\0';
+#else
+    return false;
+#endif
+}
+
+#if defined(__linux__)
+static bool MGVK_CreateH700DisplaySurface(
+    VkInstance instance, VkPhysicalDevice gpu, VkSurfaceKHR* surface)
+{
+    *surface = VK_NULL_HANDLE;
+    uint32_t count = 0;
+    VkResult err = vkGetPhysicalDeviceDisplayPropertiesKHR(gpu, &count, nullptr);
+    if (err != VK_SUCCESS || count == 0) {
+        fprintf(stderr, "H700: no Vulkan displays (%d)\n", (int)err);
+        return false;
+    }
+    std::vector<VkDisplayPropertiesKHR> displays(count);
+    err = vkGetPhysicalDeviceDisplayPropertiesKHR(gpu, &count, displays.data());
+    if (err != VK_SUCCESS) return false;
+
+    // Favor the framebuffer identified by the working MaliSX2 probe.
+    VkDisplayKHR display = displays[0].display;
+    for (const auto& entry : displays) {
+        if (entry.displayName && strstr(entry.displayName, "/dev/fb0")) {
+            display = entry.display;
+            break;
+        }
+    }
+
+    count = 0;
+    err = vkGetDisplayModePropertiesKHR(gpu, display, &count, nullptr);
+    if (err != VK_SUCCESS || count == 0) return false;
+    std::vector<VkDisplayModePropertiesKHR> modes(count);
+    err = vkGetDisplayModePropertiesKHR(gpu, display, &count, modes.data());
+    if (err != VK_SUCCESS) return false;
+    const VkDisplayModePropertiesKHR* chosen = &modes[0];
+    for (const auto& entry : modes) {
+        if (entry.parameters.visibleRegion.width == 640 &&
+            entry.parameters.visibleRegion.height == 480) {
+            chosen = &entry;
+            break;
+        }
+    }
+
+    count = 0;
+    err = vkGetPhysicalDeviceDisplayPlanePropertiesKHR(gpu, &count, nullptr);
+    if (err != VK_SUCCESS || count == 0) return false;
+    std::vector<VkDisplayPlanePropertiesKHR> planes(count);
+    err = vkGetPhysicalDeviceDisplayPlanePropertiesKHR(gpu, &count, planes.data());
+    if (err != VK_SUCCESS) return false;
+
+    uint32_t selectedPlane = count;
+    for (uint32_t index = 0; index < count; ++index) {
+        uint32_t supportedCount = 0;
+        if (vkGetDisplayPlaneSupportedDisplaysKHR(gpu, index, &supportedCount, nullptr)
+            != VK_SUCCESS || supportedCount == 0)
+            continue;
+        std::vector<VkDisplayKHR> supported(supportedCount);
+        if (vkGetDisplayPlaneSupportedDisplaysKHR(gpu, index, &supportedCount,
+                                                 supported.data()) != VK_SUCCESS)
+            continue;
+        if (std::find(supported.begin(), supported.end(), display) != supported.end()) {
+            selectedPlane = index;
+            break;
+        }
+    }
+    if (selectedPlane == count) {
+        fprintf(stderr, "H700: no compatible display plane\n");
+        return false;
+    }
+
+    VkDisplayPlaneCapabilitiesKHR caps = {};
+    err = vkGetDisplayPlaneCapabilitiesKHR(gpu, chosen->displayMode, selectedPlane, &caps);
+    if (err != VK_SUCCESS) return false;
+    if ((caps.supportedAlpha & VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR) == 0) {
+        fprintf(stderr, "H700: expected opaque plane alpha\n");
+        return false;
+    }
+    VkDisplaySurfaceCreateInfoKHR info = { VK_STRUCTURE_TYPE_DISPLAY_SURFACE_CREATE_INFO_KHR };
+    info.displayMode = chosen->displayMode;
+    info.planeIndex = selectedPlane;
+    info.planeStackIndex = planes[selectedPlane].currentStackIndex;
+    info.transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    info.globalAlpha = 1.0f;
+    info.alphaMode = VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR;
+    info.imageExtent = chosen->parameters.visibleRegion;
+    err = vkCreateDisplayPlaneSurfaceKHR(instance, &info, nullptr, surface);
+    if (err != VK_SUCCESS) {
+        fprintf(stderr, "H700: vkCreateDisplayPlaneSurfaceKHR failed: %d\n", (int)err);
+        return false;
+    }
+    printf("H700: created VK_KHR_display surface %ux%u\n",
+           info.imageExtent.width, info.imageExtent.height);
+    fflush(stdout);
+    return true;
+}
+#endif
+
 MGG_GraphicsSystem* MGG_GraphicsSystem_Create()
 {
 #ifndef __APPLE__
@@ -1007,6 +1114,18 @@ MGG_GraphicsSystem* MGG_GraphicsSystem_Create()
 
 	std::vector<const char*> instanceExtensions;
 #if defined(MG_SDL2)
+    if (MGVK_H700DirectDisplayEnabled())
+    {
+        if (!SupportsExtension(supportedInstanceExtensions, VK_KHR_SURFACE_EXTENSION_NAME) ||
+            !SupportsExtension(supportedInstanceExtensions, VK_KHR_DISPLAY_EXTENSION_NAME))
+        {
+            fprintf(stderr, "H700: VK_KHR_surface / VK_KHR_display unavailable\n");
+            return nullptr;
+        }
+        instanceExtensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+        instanceExtensions.push_back(VK_KHR_DISPLAY_EXTENSION_NAME);
+    }
+    else
 	{
 		uint32_t count = 0;
 		if (SDL_Vulkan_GetInstanceExtensions(nullptr, &count, nullptr))
@@ -2015,14 +2134,25 @@ void MGVK_RecreateSwapChain(
 		if (device->surface != nullptr)
 			vkDestroySurfaceKHR(device->instance, device->surface, nullptr);
 
-		if (!SDL_Vulkan_CreateSurface(sdl_window, device->instance, &device->surface))
-		{
-			printf("SDL_Vulkan_CreateSurface failed: %s\n", SDL_GetError());
-			fflush(stdout);
-
-			device->surface = VK_NULL_HANDLE;
-			return;
-		}
+#if defined(__linux__)
+        if (MGVK_H700DirectDisplayEnabled())
+        {
+            if (!MGVK_CreateH700DisplaySurface(device->instance, device->physicalDevice,
+                                              &device->surface))
+            {
+                fprintf(stderr, "H700: display surface creation failed\n");
+                return;
+            }
+        }
+        else
+#endif
+        if (!SDL_Vulkan_CreateSurface(sdl_window, device->instance, &device->surface))
+        {
+            printf("SDL_Vulkan_CreateSurface failed: %s\n", SDL_GetError());
+            fflush(stdout);
+            device->surface = VK_NULL_HANDLE;
+            return;
+        }
 		VK_SET_OBJECT_NAME(device->device, (uint64_t)device->surface, VK_OBJECT_TYPE_SURFACE_KHR, "MGG_GraphicsDevice.surface");
 
 		device->window = sdl_window;
