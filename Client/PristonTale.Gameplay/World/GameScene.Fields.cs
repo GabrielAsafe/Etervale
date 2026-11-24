@@ -288,6 +288,9 @@ public sealed partial class GameScene
     {
         if (_activeField == field)
             return;
+        // ETERVALE_ANDROID_MAP_PREFETCH_V29: sinalizar quando o novo mapa passa efetivamente a ativo.
+        if (OperatingSystem.IsAndroid())
+            _log.Info($"[MapLoad] active {_activeField?.Definition.Id ?? "none"} -> {field.Definition.Id}; resident={_fields.Count}");
         _activeField = field;
         _currentField = field.Definition;
         SnapWeatherToField();

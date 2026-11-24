@@ -9,6 +9,11 @@ internal static class FieldStreamingPolicy
     public const double UploadBudgetMilliseconds = 2d;
     public const int ScanIntervalFrames = 8;
     public const float IdlePrefetchDistance = 1024f;
+    // ETERVALE_ANDROID_MAP_PREFETCH_V29: o pré-carregamento Android começa mais longe da passagem;
+    // os limites de campos residentes e de upload Vulkan mantêm-se.
+    private const float AndroidMinimumPrefetchDistance = 2000f; // ETERVALE_ANDROID_MAP_PREFETCH_V30
+    private const float AndroidMaximumPrefetchDistance = 3300f;
+    private const float AndroidIdlePrefetchDistance = 850f;
     private const float MinimumApproachPrefetchDistance = 1400f;
     private const float MaximumApproachPrefetchDistance = 4500f;
     private const float LeadSeconds = 4f;
@@ -20,7 +25,9 @@ internal static class FieldStreamingPolicy
         // ETERVALE_ANDROID_STREAMING_V8: menor raio de procura no telemovel, sem impedir transicoes.
         if (OperatingSystem.IsAndroid())
             return !float.IsFinite(speed) || speed < 0f
-                ? 900f : Math.Clamp(900f + speed * 2f, 900f, 1700f);
+                ? AndroidMinimumPrefetchDistance
+                : Math.Clamp(AndroidMinimumPrefetchDistance + speed * 2f,
+                    AndroidMinimumPrefetchDistance, AndroidMaximumPrefetchDistance);
 
         if (!float.IsFinite(speed) || speed < 0f)
         {
@@ -35,7 +42,9 @@ internal static class FieldStreamingPolicy
 
     public static float RetentionDistance(float speed)
     {
-        return PrefetchDistance(speed) + (OperatingSystem.IsAndroid() ? 700f : RetentionMargin);
+        return OperatingSystem.IsAndroid()
+            ? Math.Clamp(PrefetchDistance(speed) + 400f, 1800f, 2400f)
+            : PrefetchDistance(speed) + RetentionMargin;
     }
 
     public static bool ShouldPrefetch(
@@ -51,7 +60,7 @@ internal static class FieldStreamingPolicy
 
         var portalDelta = portalPosition - playerPosition;
         var portalDistanceSquared = portalDelta.LengthSquared();
-        var idlePrefetchDistance = OperatingSystem.IsAndroid() ? 384f : IdlePrefetchDistance;
+        var idlePrefetchDistance = OperatingSystem.IsAndroid() ? AndroidIdlePrefetchDistance : IdlePrefetchDistance;
         if (portalDistanceSquared <= idlePrefetchDistance * idlePrefetchDistance)
         {
             return true;

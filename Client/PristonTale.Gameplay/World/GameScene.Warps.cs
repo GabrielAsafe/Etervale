@@ -57,6 +57,28 @@ public sealed partial class GameScene
 
     private static Vector2 GatePlanar(FieldGate gate) => WorldSpace.Planar(gate.X, gate.Z);
 
+    // ETERVALE_ANDROID_MAP_PREFETCH_V29: um evento por espera, não um log por frame.
+    private string _mapWaitFieldId;
+    private long _mapWaitStartTicks;
+
+    private void BeginMapWait(string fieldId, string reason)
+    {
+        if (!OperatingSystem.IsAndroid()) return;
+        if (_mapWaitFieldId == fieldId) return;
+        _mapWaitFieldId = fieldId;
+        _mapWaitStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        _log.Info($"[MapLoad] waiting {fieldId}; trigger={reason}");
+    }
+
+    private void CompleteMapWait(string fieldId)
+    {
+        if (!OperatingSystem.IsAndroid() || _mapWaitFieldId != fieldId) return;
+        var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(_mapWaitStartTicks).TotalMilliseconds;
+        _log.Info($"[MapLoad] ready {fieldId}; waited={elapsed:F1} ms");
+        _mapWaitFieldId = null;
+        _mapWaitStartTicks = 0;
+    }
+
     private void UpdateWarps(float dtSeconds)
     {
         if (_pendingWarp is not null)
@@ -158,9 +180,11 @@ public sealed partial class GameScene
         var dest = FindLoaded(destDef.Id);
         if (dest is null)
         {
+            BeginMapWait(destDef.Id, "portal");
             RequestField(destDef, priority: true);
             return false;
         }
+        CompleteMapWait(destDef.Id);
 
         for (var i = _fields.Count - 1; i >= 0; i--)
         {
@@ -217,10 +241,12 @@ public sealed partial class GameScene
                 _pendingFieldWarp = warp;
                 _hasMoveTarget = false;
                 _followCursor = false;
+                BeginMapWait(field.Id, "server-warp");
                 RequestField(field, priority: true);
                 return;
             }
 
+            CompleteMapWait(field.Id);
             SetActiveField(loaded);
             _reports.SetField(field.FieldCode);
             _hasMoveTarget = false;

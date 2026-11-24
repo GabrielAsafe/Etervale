@@ -16,8 +16,9 @@ internal sealed class FieldResourceStreamer : IDisposable
     private readonly Action<FieldLighting> _configureLighting;
 
     // ETERVALE_ANDROID_STREAMING_V8: manter o streaming, mas limitar a sobreposicao no Mali.
-    private static readonly TimeSpan AndroidWarmup = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan AndroidCooldown = TimeSpan.FromSeconds(3);
+    // ETERVALE_ANDROID_MAP_PREFETCH_V30: iniciar um vizinho mais cedo, mas nunca durante a primeira fase de arranque.
+    private static readonly TimeSpan AndroidWarmup = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan AndroidCooldown = TimeSpan.FromSeconds(2); // ETERVALE_ANDROID_MAP_PREFETCH_V30
     private readonly long _androidCreatedTicks = System.Diagnostics.Stopwatch.GetTimestamp();
     private long _androidLastPublishedTicks;
     // ETERVALE_ANDROID_STREAMING_V10_PROGRESS: count steps and log progress while the GPU publishes a field.
