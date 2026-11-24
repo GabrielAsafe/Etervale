@@ -196,7 +196,12 @@ public sealed partial class GameScene : ISkillSceneHost
 
         ulong target = 0;
         var kind = EntityKind.Monster;
-        if (TryCursorRay(mouse, out var ray) && _remote.TryPick(ray, _remote.SelfEntityId, out var picked, out var pickedKind))
+        if (MobileActionOnly && _remote.TryGetMobileTarget(_targetSelection.FrameId, out var selectedKind))
+        {
+            target = _targetSelection.FrameId;
+            kind = selectedKind;
+        }
+        else if (TryCursorRay(mouse, out var ray) && _remote.TryPick(ray, _remote.SelfEntityId, out var picked, out var pickedKind))
         {
             target = picked;
             kind = pickedKind;

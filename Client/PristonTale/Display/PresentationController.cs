@@ -95,6 +95,7 @@ internal sealed class PresentationController
     // Every frame: a manual resize becomes the windowed size; a maximized window keeps the size it is restored to.
     public void CaptureWindowSize(int width, int height)
     {
+        if (OperatingSystem.IsAndroid()) return;
         if (_applied is null || _applied.WindowMode != WindowMode.Windowed || _window.IsMaximized)
         {
             return;
@@ -120,6 +121,7 @@ internal sealed class PresentationController
     // restores them).
     public void CaptureWindowPlacement()
     {
+        if (OperatingSystem.IsAndroid()) return;
         if (_applied is null || _shared.AwaitingConfirmation || _applied.WindowMode != WindowMode.Windowed || _shared.Requested != _applied)
         {
             return;

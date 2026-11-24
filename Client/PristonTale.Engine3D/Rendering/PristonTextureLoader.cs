@@ -20,7 +20,9 @@ public sealed class PristonTextureLoader : IDisposable
     private readonly ConcurrentDictionary<string, string> _fallbackDirectories = new(StringComparer.OrdinalIgnoreCase);
     // Per-texture override for shared directories: an opening NPC must not redirect other NPC materials.
     private readonly ConcurrentDictionary<string, string> _namedFallbackDirectories = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly SemaphoreSlim DecodeSlots = new(2, 2);
+    // ETERVALE_ANDROID_STREAMING_V8: uma descodificacao por vez no Android (picos RAM/CPU).
+    private static readonly SemaphoreSlim DecodeSlots = OperatingSystem.IsAndroid()
+        ? new SemaphoreSlim(1, 1) : new SemaphoreSlim(2, 2);
     // The classic alpha-test reference value.
     internal const byte AlphaCutoffByte = 60;
     private Texture2D _white;

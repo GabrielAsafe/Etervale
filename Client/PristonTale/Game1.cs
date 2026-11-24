@@ -30,6 +30,7 @@ public class Game1 : Game
 
     public Game1(string settingsPath = null)
     {
+        Mouse.EtervaleAndroid = OperatingSystem.IsAndroid();
         _settingsStore = new ClientSettingsStore(settingsPath ?? ClientSettingsStore.DefaultPath, ConsoleClientLog.Instance);
         _presentation.Requested = _settingsStore.Load();
         _graphics = new GraphicsDeviceManager(this)
@@ -37,7 +38,7 @@ public class Game1 : Game
             PreferredBackBufferWidth = _presentation.Requested.WindowWidth,
             PreferredBackBufferHeight = _presentation.Requested.WindowHeight,
             GraphicsProfile = GraphicsProfile.HiDef,
-            HardwareModeSwitch = true,
+            HardwareModeSwitch = !OperatingSystem.IsAndroid(),
             SynchronizeWithVerticalRetrace = _presentation.VerticalSync,
             // The scene renders into the renderer's multisampled HDR target; the back buffer receives the display
             // transform and the UI only.
@@ -47,7 +48,7 @@ public class Game1 : Game
         IsFixedTimeStep = false;
         InactiveSleepTime = TimeSpan.Zero;
         TargetElapsedTime = TimeSpan.FromSeconds(1d / FrameTiming.TargetHz);
-        Window.AllowUserResizing = true;
+        Window.AllowUserResizing = !OperatingSystem.IsAndroid();
         Window.Title = "Etervale";
         Content.RootDirectory = "Content";
         IsMouseVisible = true;
@@ -109,7 +110,7 @@ public class Game1 : Game
             _presentation.ConfirmRequested |= keyboard.IsKeyDown(Keys.Enter) && !_lastKeyboardState.IsKeyDown(Keys.Enter);
             escapePressed = false;
         }
-        if (GamePad.GetState(PlayerIndex.One).Buttons.Back == ButtonState.Pressed || escapePressed && !_client.HandleEscape() || _client.ExitRequested)
+        if ((!OperatingSystem.IsAndroid() && GamePad.GetState(PlayerIndex.One).Buttons.Back == ButtonState.Pressed) || escapePressed && !_client.HandleEscape() || _client.ExitRequested)
         {
             Exit();
         }

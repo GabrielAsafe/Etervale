@@ -465,6 +465,8 @@ public sealed partial class GameScene : IDisposable, IHudPortraitScene
         UpdateStreaming();
         if (_camera != null && _activeField != null)
         {
+            if (OperatingSystem.IsAndroid() && CameraInputEnabled && !MovementLocked && !KeyboardCaptured)
+                _camera.ApplyMobileOrbit(MobileOrbit, frameDt);
             UpdateCamera(gameTime);
         }
 

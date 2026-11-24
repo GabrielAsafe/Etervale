@@ -37,6 +37,10 @@ public sealed class HudChat
     // Raised when the server asks the client to save and quit.
     public event Action CloseRequested;
 
+    // ETERVALE_ANDROID_V6_CHAT_IME: callback no Android, null em desktop/H700.
+    public static Action<bool> AndroidKeyboardRequested { get; set; }
+    private bool _androidPreviousFocus;
+
     public bool KeyboardCaptured => Window.Focused;
 
     public void Observe(PresenceUpdate update, double nowMs)
@@ -96,6 +100,14 @@ public sealed class HudChat
     // commands. Typed characters (backspace included) arrive from the window's text input.
     public void Update(KeyboardState keyboard, KeyboardState previous, IEnumerable<char> typed, double nowMs, HudChatTab tab)
     {
+        // O foco tambem muda por clique em HudChatWindow, nao so por Enter.
+        // A deteccao em cada frame cobre ambas as vias e evita chamadas repetidas.
+        if (_androidPreviousFocus != Window.Focused)
+        {
+            _androidPreviousFocus = Window.Focused;
+            AndroidKeyboardRequested?.Invoke(_androidPreviousFocus);
+        }
+
         bool Pressed(Keys key) => keyboard.IsKeyDown(key) && !previous.IsKeyDown(key);
         var control = keyboard.IsKeyDown(Keys.LeftControl) || keyboard.IsKeyDown(Keys.RightControl);
         if (!Window.Focused)

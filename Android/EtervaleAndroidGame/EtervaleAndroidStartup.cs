@@ -16,6 +16,7 @@ internal static class EtervaleAndroidStartup
             ?? activity.FilesDir?.AbsolutePath
             ?? throw new InvalidOperationException("Sem armazenamento privado Android.");
         Directory.CreateDirectory(root);
+        Environment.SetEnvironmentVariable("ETERVALE_MOBILE_SETTINGS", Path.Combine(root, "mobile-controls.json"));
         string path = Path.Combine(root, "client-settings.json");
         if (File.Exists(path))
         {
@@ -27,13 +28,17 @@ internal static class EtervaleAndroidStartup
         // four high-resolution cascaded shadow maps, PCSS, AO and expensive TAA.
         var settings = new ClientSettings
         {
-            ServerAddress = "tcp://192.168.1.111:10009?cert=89CCCD31A09D1218460E0610B7F03EDB3D4E3EFA35D4A721DFEAE74CC77379D7",
+            // ETERVALE_ANDROID_V6_STARTUP_DEFAULTS
+            // Cada utilizador configura o endpoint TLS no seu client-settings.json.
+            // Nunca versionar o IP e o pin de outro servidor como configuracao publica.
+            ServerAddress = "localhost",
             Language = "pt-BR",
             WindowWidth = 1280,
             WindowHeight = 720,
             MultiSampleCount = 0,
-            MaxFps = 60,
-            BackgroundMaxFps = 30,
+            MaxFps = 30,
+            BackgroundMaxFps = 15,
+            UiScale = 1.5f,
             VerticalSync = true
         }.WithQuality(GraphicsQuality.Low);
 

@@ -15,6 +15,16 @@ internal sealed class FieldResourceStreamer : IDisposable
     private readonly IClientLog _log;
     private readonly Action<FieldLighting> _configureLighting;
 
+    // ETERVALE_ANDROID_STREAMING_V8: manter o streaming, mas limitar a sobreposicao no Mali.
+    private static readonly TimeSpan AndroidWarmup = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan AndroidCooldown = TimeSpan.FromSeconds(3);
+    private readonly long _androidCreatedTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+    private long _androidLastPublishedTicks;
+    // ETERVALE_ANDROID_STREAMING_V10_PROGRESS: count steps and log progress while the GPU publishes a field.
+    private long _androidGpuProgressTicks;
+    private long _androidGpuMoves;
+    private FieldDef _androidDeferredPriority;
+
     public FieldResourceStreamer(
         string assetRoot,
         PristonSmdReader reader,
@@ -45,6 +55,20 @@ internal sealed class FieldResourceStreamer : IDisposable
 
     public void Request(FieldDef field)
     {
+        // ETERVALE_ANDROID_STREAMING_V8: nao iniciar o primeiro vizinho em pleno arranque do mundo.
+        // O ScanStreaming volta a pedir o campo periodicamente; nao se perde a solicitacao.
+        if (OperatingSystem.IsAndroid())
+        {
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(_androidCreatedTicks) < AndroidWarmup)
+                return;
+            if (_androidLastPublishedTicks != 0 &&
+                System.Diagnostics.Stopwatch.GetElapsedTime(_androidLastPublishedTicks) < AndroidCooldown)
+                return;
+            // Um unico campo especulativo, da preparacao CPU ao fim do upload GPU.
+            if (_fieldLoads.Count != 0 || _stageUpload is not null)
+                return;
+        }
+
         if (InFlight(field.Id)
             || _failedFieldLoads.Contains(field.Id)
             || NeighbourInFlight()
@@ -60,6 +84,17 @@ internal sealed class FieldResourceStreamer : IDisposable
     {
         if (_failedFieldLoads.Contains(field.Id))
         {
+            return;
+        }
+
+        // ETERVALE_ANDROID_STREAMING_V8: prioridade nao cancela a meio um upload Vulkan.
+        // Termina o campo atual, e no fotograma seguinte inicia o prioritario.
+        if (OperatingSystem.IsAndroid() && _stageUpload is not null &&
+            _uploadingField is not null && _uploadingField.Definition.Id != field.Id)
+        {
+            if (_androidDeferredPriority?.Id != field.Id)
+                _log.Info($"[Stream] Android priority queued: {field.Id}; finishing {_uploadingField.Definition.Id}.");
+            _androidDeferredPriority = field;
             return;
         }
 
@@ -126,7 +161,7 @@ internal sealed class FieldResourceStreamer : IDisposable
             }
         }
 
-        if (_stageUpload is not null && _uploadingField.Definition.Id != keepFieldId)
+        if (!OperatingSystem.IsAndroid() && _stageUpload is not null && _uploadingField.Definition.Id != keepFieldId)
         {
             AbandonUpload();
         }
@@ -152,6 +187,13 @@ internal sealed class FieldResourceStreamer : IDisposable
 
     public LoadedField Update()
     {
+        // ETERVALE_ANDROID_STREAMING_V8: retomar teleport pendente depois de publicar o upload anterior.
+        if (OperatingSystem.IsAndroid() && _stageUpload is null && _androidDeferredPriority is { } next)
+        {
+            _androidDeferredPriority = null;
+            Prioritize(next);
+        }
+
         // A destination that is no longer preparing or uploading (published, failed or cancelled) holds nothing back.
         if (_priorityFieldId is not null && !InFlight(_priorityFieldId))
         {
@@ -194,6 +236,12 @@ internal sealed class FieldResourceStreamer : IDisposable
                     _maximumFieldUploadMilliseconds = 0d;
                     _fieldUploadFrames = 0;
                     _stageUpload = _renderer.AddStageIncrementally(_uploadingField.Stage, _uploadingField.Models);
+                    if (OperatingSystem.IsAndroid())
+                    {
+                        _androidGpuMoves = 0;
+                        _androidGpuProgressTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+                        _log.Info($"[Stream] Android GPU upload begin: {_uploadingField.Definition.Id}.");
+                    }
                 }
                 else if (!preparation.IsCanceled)
                 {
@@ -213,12 +261,19 @@ internal sealed class FieldResourceStreamer : IDisposable
         try
         {
             // A soft budget between indivisible GPU calls, plus a hard cap on steps per frame.
-            for (var step = 0; step < FieldStreamingPolicy.MaximumUploadSteps; step++)
+            // ETERVALE_ANDROID_STREAMING_V8: uploads em pequenas parcelas; nao bloquear um frame com 32 passos.
+            // ETERVALE_ANDROID_STREAMING_V10_PROGRESS: a v8.1 limitava 2 passos por frame, deixando campos longos sem publicar.
+            // Continua abaixo dos 32 passos desktop, com um orçamento de tempo moderado.
+            // ETERVALE_ANDROID_STREAMING_V11_TUNE: teste A/B; 8 -> 12 passos Android (32 desktop inalterados).
+            var maximumSteps = OperatingSystem.IsAndroid() ? 12 : FieldStreamingPolicy.MaximumUploadSteps;
+            for (var step = 0; step < maximumSteps; step++)
             {
                 if (!_stageUpload.MoveNext())
                 {
                     throw new InvalidOperationException("Stage upload ended without publishing its handle.");
                 }
+                if (OperatingSystem.IsAndroid())
+                    _androidGpuMoves++;
 
                 var handle = _stageUpload.Current;
                 if (handle is not null)
@@ -233,10 +288,13 @@ internal sealed class FieldResourceStreamer : IDisposable
                     _stageUpload.Dispose();
                     _stageUpload = null;
                     _uploadingField = null;
+                    if (OperatingSystem.IsAndroid())
+                        _androidLastPublishedTicks = System.Diagnostics.Stopwatch.GetTimestamp();
                     return loaded;
                 }
 
-                if (System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= FieldStreamingPolicy.UploadBudgetMilliseconds)
+                var budgetMs = OperatingSystem.IsAndroid() ? 8d : FieldStreamingPolicy.UploadBudgetMilliseconds;
+                if (System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= budgetMs)
                 {
                     break;
                 }
@@ -256,6 +314,16 @@ internal sealed class FieldResourceStreamer : IDisposable
             _maximumFieldUploadMilliseconds = Math.Max(
                 _maximumFieldUploadMilliseconds,
                 System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+            // ETERVALE_ANDROID_STREAMING_V10_PROGRESS: report a stalled/slow GPU phase every 5 s without aborting it.
+            if (OperatingSystem.IsAndroid() && _stageUpload is not null && _uploadingField is not null &&
+                System.Diagnostics.Stopwatch.GetElapsedTime(_androidGpuProgressTicks) >= TimeSpan.FromSeconds(5))
+            {
+                var seconds = System.Diagnostics.Stopwatch.GetElapsedTime(_uploadingField.Started).TotalSeconds;
+                _log.Info($"[Stream] Android GPU progress {_uploadingField.Definition.Id}: " +
+                    $"moves={_androidGpuMoves}, frames={_fieldUploadFrames}, total={seconds:F1}s, " +
+                    $"worstFrame={_maximumFieldUploadMilliseconds:F1}ms.");
+                _androidGpuProgressTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            }
         }
 
         return null;
@@ -289,6 +357,7 @@ internal sealed class FieldResourceStreamer : IDisposable
 
     public void Dispose()
     {
+        _androidDeferredPriority = null;
         _stageUpload?.Dispose();
         _stageUpload = null;
         _uploadingField = null;

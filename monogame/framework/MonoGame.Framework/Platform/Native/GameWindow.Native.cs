@@ -410,19 +410,20 @@ internal class NativeGameWindow : GameWindow
         _width = pp.BackBufferWidth;
         _height = pp.BackBufferHeight;
 
-        if (HasCreatedWindow)
+        if (HasCreatedWindow && !Mouse.EtervaleAndroid)
             MGP.Window_SetClientSize(_handle, pp.BackBufferWidth, pp.BackBufferHeight);
     }
 
     public unsafe void ClientResize(int width, int height)
     {
+        if (width <= 0 || height <= 0) return;
         if (_width == width && _height == height)
             return;
 
         _width = width;
         _height = height;
 
-        if (HasCreatedWindow)
+        if (HasCreatedWindow && !Mouse.EtervaleAndroid)
             MGP.Window_SetClientSize(_handle, width, height);
 
         var graphicsDevice = _platform.Game.GraphicsDevice;

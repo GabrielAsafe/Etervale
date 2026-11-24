@@ -113,6 +113,11 @@ public sealed partial class GameScene
 
     private void RequestField(FieldDef field, bool priority = false)
     {
+        // ETERVALE_ANDROID_STREAMING_V8: campo atual + 1 vizinho. Teleporte explicito tem prioridade.
+        // Se o campo anterior ainda esta presente, aguardar a sua libertacao.
+        if (OperatingSystem.IsAndroid() && !priority && _fields.Count >= 2)
+            return;
+
         if (!IsLoaded(field.Id))
         {
             if (priority)

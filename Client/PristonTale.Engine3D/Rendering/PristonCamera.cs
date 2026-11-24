@@ -116,7 +116,7 @@ public sealed class PristonCamera
             _pitch = MathHelper.Clamp(_pitch + dy * _settings.MouseOrbitSensitivity, _settings.MinPitch, _settings.MaxPitch);
         }
 
-        if (!pointerCaptured && mouse.MiddleButton == ButtonState.Released && viewport.Contains(mouse.Position)
+        if (!OperatingSystem.IsAndroid() && !pointerCaptured && mouse.MiddleButton == ButtonState.Released && viewport.Contains(mouse.Position)
             && viewport.Width > _settings.EdgeOrbitWidth * 2 && float.IsFinite(deltaSeconds) && deltaSeconds > 0f)
         {
             if (mouse.X < viewport.Left + _settings.EdgeOrbitWidth)
@@ -151,6 +151,14 @@ public sealed class PristonCamera
         }
 
         _lastMouse = mouse;
+    }
+
+    public void ApplyMobileOrbit(Vector2 axis, float elapsedSeconds)
+    {
+        if (!float.IsFinite(axis.X) || !float.IsFinite(axis.Y) || !float.IsFinite(elapsedSeconds)) return;
+        var dt = Math.Clamp(elapsedSeconds, 0f, .05f);
+        _yaw += Math.Clamp(axis.X, -1f, 1f) * _settings.EdgeOrbitRadiansPerSecond * dt;
+        _pitch = MathHelper.Clamp(_pitch - Math.Clamp(axis.Y, -1f, 1f) * dt, _settings.MinPitch, _settings.MaxPitch);
     }
 
     private void EnsureProjection(GraphicsDevice graphicsDevice, float fieldOfViewRadians)

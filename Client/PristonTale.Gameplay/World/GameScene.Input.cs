@@ -32,6 +32,54 @@ namespace PristonTale.Gameplay.World;
 // The local player's input: moving, picking loot and targets, approaching NPCs and the attack it shows.
 public sealed partial class GameScene
 {
+    internal Vector2 MobileMove { get; set; }
+    internal Vector2 MobileOrbit { get; set; }
+    internal bool MobileActionOnly { get; set; }
+    private bool _mobileMoving;
+
+    private void UpdateMobileMovement(MouseState mouse)
+    {
+        // Mouse/skill input and modal locks take priority. Releasing the stick only stops a stick-owned walk.
+        var input = MobileMove;
+        var wanted = input.LengthSquared() > .0001f && CameraInputEnabled && !MovementLocked && !KeyboardCaptured
+            && !SelfCasting && !SelfStunned && !_selfAttacking && !_playerController.LocomotionFrozen && _pendingCast is null
+            && mouse.LeftButton == ButtonState.Released && mouse.RightButton == ButtonState.Released;
+        if (!wanted)
+        {
+            if (_mobileMoving)
+            {
+                _mobileMoving = false;
+                // A new mouse click or cast may already own the destination.
+                if (mouse.LeftButton == ButtonState.Released && mouse.RightButton == ButtonState.Released && !SelfCasting && _pendingCast is null && _attackInput.TargetId == 0 && _npcTargetId == 0)
+                {
+                    StopPredictedMovement();
+                    _reports.Request();
+                }
+            }
+            return;
+        }
+        var forward = new Vector2(_camera.FlatForward.X, _camera.FlatForward.Z);
+        if (forward.LengthSquared() < .0001f) return;
+        forward.Normalize();
+        var right = new Vector2(-forward.Y, forward.X);
+        var direction = forward * input.Y + right * input.X;
+        if (direction.LengthSquared() < .0001f) return;
+        direction.Normalize();
+        if (!_mobileMoving)
+        {
+            EndSkillTrace();
+            CancelPendingCast();
+            ClearAttackTarget();
+            _lootInteraction?.Cancel();
+            _holdCursorMovement = false;
+            _followCursor = false;
+            _reports.Request();
+        }
+        _mobileMoving = true;
+        _moveTarget = _playerBody.PlanarPosition + direction * Math.Max(PlayerRadius * 4f, MovementSpeed(_runMode) * .25f);
+        _hasMoveTarget = true;
+    }
+
     private void UpdatePlayerInput(GameTime gameTime)
     {
         if (_renderer == null || _activeField == null || _camera == null || _playerBody == null)
@@ -60,6 +108,12 @@ public sealed partial class GameScene
             _reports.Request();
         }
 
+        if (_mobileMoving && (mouse.LeftButton == ButtonState.Pressed || mouse.RightButton == ButtonState.Pressed))
+        {
+            _mobileMoving = false;
+            StopPredictedMovement();
+            _reports.Request();
+        }
         if (mouse.LeftButton == ButtonState.Released)
         {
             _holdCursorMovement = false;
@@ -87,17 +141,17 @@ public sealed partial class GameScene
             _followCursor = false;
             _holdCursorMovement = false;
             EndSkillTrace();
-            if (TryPickLoot(mouse))
+            if (!MobileActionOnly && TryPickLoot(mouse))
             {
             }
-            else if (!SelfCasting && TryCastSkillClick(mouse, rightButton: false))
+            else if (!MobileActionOnly && !SelfCasting && TryCastSkillClick(mouse, rightButton: false))
             {
             }
             else if (TryPickAttackTarget(mouse))
             {
                 _hasMoveTarget = false;
             }
-            else if (SetMoveTarget(mouse))
+            else if (!MobileActionOnly && SetMoveTarget(mouse))
             {
                 // A ground click during a skill motion is kept: the walk starts once the skill ends.
                 CancelPendingCast();
@@ -127,6 +181,7 @@ public sealed partial class GameScene
             SetMoveTarget(mouse);
         }
 
+        if (OperatingSystem.IsAndroid()) UpdateMobileMovement(mouse);
         if (_hasMoveTarget && !_playerController.LocomotionFrozen && !_selfAttacking && !SelfCasting && !SelfStunned)
         {
             var current = _playerBody.PlanarPosition;
@@ -276,14 +331,17 @@ public sealed partial class GameScene
         {
             return false;
         }
-        if (!TryCursorRay(mouse, out var ray))
+        ulong entityId;
+        EntityKind kind;
+        if (MobileActionOnly && _remote.TryGetMobileTarget(_targetSelection.FrameId, out kind))
+        {
+            entityId = _targetSelection.FrameId;
+        }
+        else if (!TryCursorRay(mouse, out var ray) || !_remote.TryPick(ray, _remote.SelfEntityId, out entityId, out kind))
         {
             return false;
         }
-        if (!_remote.TryPick(ray, _remote.SelfEntityId, out var entityId, out var kind))
-        {
-            return false;
-        }
+        if (MobileActionOnly && (kind == EntityKind.Npc || kind == EntityKind.Player && !Fights(entityId))) return false;
         // A seller is approached and its shop opened as an NPC's dialog is; another player is approached for the buttons
         // under its portrait, unless the castle's battle zone lets the two fight (the server decides).
         if (kind is EntityKind.Npc || kind == EntityKind.Player && !Fights(entityId))

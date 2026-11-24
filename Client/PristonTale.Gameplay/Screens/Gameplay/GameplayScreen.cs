@@ -162,10 +162,19 @@ public sealed class GameplayScreen : GameScreen
         _hud.PlayerActing = _scene.PlayerActing;
         _hud.PlayerActionStarts = _scene.PlayerActionStarts;
         _hud.RestartOffer = _scene.RestartOffer;
+        if (Context.Presentation.AwaitingConfirmation) _hud.Mobile.Reset(preservePointer: true);
+        else _hud.Mobile.Update(Context.GraphicsDevice.Viewport, gameTime,
+            Context.IsWindowActive,
+            _hud.MobileOverlayAllowed, _hud.MobileTyping, backAvailable: _hud.MobileBackAllowed);
+        if (_hud.Mobile.PanelCloseRequested) _hud.ClosePanel();
+        if (_hud.Mobile.CloseRequested && !Context.Presentation.AwaitingConfirmation) HandleEscape();
         _hud.Update(_scene.Owner);
-        _scene.PointerCaptured = _hud.PointerCaptured;
-        _scene.MovementLocked = _hud.HoldsPlayer;
-        _scene.KeyboardCaptured = _hud.KeyboardCaptured;
+        _scene.MobileMove = _hud.MobileOverlayAllowed && !_hud.Mobile.MenuCaptures ? _hud.Mobile.Movement : Vector2.Zero;
+        _scene.MobileOrbit = _hud.MobileOverlayAllowed && !_hud.Mobile.MenuCaptures ? _hud.Mobile.Orbit : Vector2.Zero;
+        _scene.MobileActionOnly = _hud.Mobile.WorldActionOnly;
+        _scene.PointerCaptured = _hud.PointerCaptured && !(_hud.Mobile.WorldActionOnly && _hud.MobileOverlayAllowed);
+        _scene.MovementLocked = _hud.HoldsPlayer || _hud.Mobile.MenuCaptures || (OperatingSystem.IsAndroid() && (!Context.IsWindowActive || _hud.MobileTyping || Context.Presentation.AwaitingConfirmation || (_hud.MobileBackAllowed && !_hud.MobileOverlayAllowed)));
+        _scene.KeyboardCaptured = _hud.KeyboardCaptured || (OperatingSystem.IsAndroid() && (_hud.MobileTyping || !Context.IsWindowActive));
         _hud.Chat.SelfId = _scene.SelfEntityId;
         _scene.CameraInputEnabled = Context.IsWindowActive && !Context.Presentation.AwaitingConfirmation;
         _scene.RightAttackEnabled = _hud.RightAttackEnabled;

@@ -3184,6 +3184,14 @@ void MGG_GraphicsDevice_Present(MGG_GraphicsDevice* device, mgint currentFrame, 
 		presentInfo.pSwapchains = &device->swapchain;
 		presentInfo.pImageIndices = &frame.image_index;
 		res = vkQueuePresentKHR(device->queue, &presentInfo);
+#if defined(__ANDROID__)
+		// ETERVALE_ANDROID_MALI_SERIAL_PRESENT_V9: DIAGNOSTICO, nao fix definitivo.
+		// Espera a fila Vulkan acabar cada frame para testar se o driver Mali
+		// falha com trabalho de varios frames simultaneamente em voo.
+		// Esta operacao tem custo alto; ao reverter recupera-se o desempenho.
+		VkResult androidSerialIdle = vkQueueWaitIdle(device->queue);
+		VK_CHECK_RESULT(androidSerialIdle);
+#endif
 	}
 
 	// Cleanup any finished transfers as they may be

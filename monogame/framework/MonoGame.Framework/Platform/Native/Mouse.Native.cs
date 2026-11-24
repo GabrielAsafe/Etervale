@@ -21,10 +21,16 @@ public static partial class Mouse
         // TODO: Multiple window support.
     }
 
+    // Android gameplay sets a snapshot on the game thread; desktop never sets this.
+    /// <summary>Estado do rato virtual fornecido pelos controlos mobile do Etervale.</summary>
+    public static MouseState? EtervaleOverride { get; set; }
+    /// <summary>Indica se o Etervale está a executar no Android.</summary>
+    public static bool EtervaleAndroid { get; set; }
+
     private static unsafe MouseState PlatformGetState(GameWindow window)
     {
         // Mouse events keep this updated for each window.
-        return window.MouseState;
+        return EtervaleOverride ?? window.MouseState;
     }
 
     private static unsafe void PlatformSetPosition(int x, int y)

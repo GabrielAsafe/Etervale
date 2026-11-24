@@ -58,7 +58,7 @@ internal sealed class DisplayConfirmation
 
         var layout = Layout();
         var panel = Panel(layout);
-        _canvas.Begin(layout.Scale);
+        _canvas.Begin(layout.PixelScale);
         _canvas.Frame(panel);
         _canvas.Text(ClientText.Get("Display.Keep"), new Rectangle(panel.X + 20, panel.Y + 14, panel.Width - 40, 32), centered: true);
         _canvas.Text(_context.Presentation.EffectiveDisplay, new Rectangle(panel.X + 20, panel.Y + 50, panel.Width - 40, 28), pixels: 16f, centered: true);

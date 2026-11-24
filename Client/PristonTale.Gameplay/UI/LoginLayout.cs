@@ -14,7 +14,11 @@ public readonly record struct LoginLayout(float Scale, Rectangle Panel)
 
     public static LoginLayout Create(int width, int height)
     {
-        var scale = Math.Max(0.1f, Math.Min(1, Math.Min((width - 24) / 480f, (height - 24) / 720f)));
+        // ETERVALE_ANDROID_V6_LOGIN_SCALE
+        // Desktop/H700 mantem o maximo historico 1.0; Android amplia em ecras densos.
+        // Pointer() ja usa o inverso da escala, mantendo hit testing coerente.
+        var fit = Math.Min((width - 24) / 480f, (height - 24) / 720f);
+        var scale = Math.Max(0.1f, OperatingSystem.IsAndroid() ? fit : Math.Min(1f, fit));
         var x = (int)((width / scale - 480) / 2);
         var y = (int)((height / scale - 720) / 2);
         return new LoginLayout(scale, new Rectangle(x, y, 480, 720));

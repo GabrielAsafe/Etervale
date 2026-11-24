@@ -39,6 +39,7 @@ public sealed class GameClient : IDisposable
     private bool _h700HudRequested;
     private string _h700LazyStatus = "Arranque minimo pronto";
     private DisplayConfirmation _displayConfirmation;
+    private readonly MobileControls _menuControls = new();
 
     public GameClient(GraphicsDevice graphicsDevice, ContentManager content, string assetRoot, string serverAddress, PresentationSettings presentation = null)
     {
@@ -176,6 +177,15 @@ public sealed class GameClient : IDisposable
             _context.IsWindowActive = isWindowActive;
         }
 
+        if (OperatingSystem.IsAndroid() && (_screen is not PristonTale.Gameplay.Screens.Gameplay.GameplayScreen || _presentation.AwaitingConfirmation))
+        {
+            _menuControls.Update(_graphicsDevice.Viewport, gameTime, isWindowActive, false, false, gameplay: false);
+            if (_menuControls.CloseRequested)
+            {
+                if (_presentation.AwaitingConfirmation) _presentation.RevertRequested = true;
+                else HandleEscape();
+            }
+        }
         _displayConfirmation?.Update();
         _screen?.Update(gameTime);
         if (_pendingScreen != null)
@@ -282,6 +292,7 @@ public sealed class GameClient : IDisposable
 
     private void SetScreen(GameScreen next)
     {
+        _menuControls.Reset();
         _screen?.Dispose();
         _screen = next;
         _screen.Enter();
@@ -316,6 +327,7 @@ public sealed class GameClient : IDisposable
 
         // GPU resources are released on the game thread. Network/database cleanup runs asynchronously, after the screen's
         // closing work (leaving the world, so the server stores the character) has used the connection.
+        _menuControls.Reset();
         var screen = _screen;
         screen?.Dispose();
         var closing = screen?.Closing ?? Task.CompletedTask;

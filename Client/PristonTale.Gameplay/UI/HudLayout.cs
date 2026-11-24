@@ -9,12 +9,21 @@ public readonly record struct HudLayout(int Scale, int Width, int Height, int Vi
     public const int DesignWidth = 800;
     public const int DesignHeight = 600;
 
-    public static HudLayout Of(Microsoft.Xna.Framework.Graphics.Viewport viewport) => Create(viewport.Width, viewport.Height);
+    // Scale is retained for desktop callers/tests; PixelScale is the actual draw/hit transform.
+    public float PixelScale { get; init; } = Math.Max(1, Scale);
 
-    public static HudLayout Create(int viewportWidth, int viewportHeight)
+    public static HudLayout Of(Microsoft.Xna.Framework.Graphics.Viewport viewport) => Create(viewport.Width, viewport.Height, OperatingSystem.IsAndroid());
+
+    public static HudLayout Create(int viewportWidth, int viewportHeight, bool mobile = false)
     {
         viewportWidth = Math.Max(1, viewportWidth);
         viewportHeight = Math.Max(1, viewportHeight);
+        if (mobile)
+        {
+            var fit = Math.Min(viewportWidth / (float)DesignWidth, viewportHeight / (float)DesignHeight);
+            return new HudLayout(1, Math.Max(DesignWidth, (int)MathF.Floor(viewportWidth / fit)),
+                Math.Max(DesignHeight, (int)MathF.Floor(viewportHeight / fit)), viewportWidth, viewportHeight) { PixelScale = fit };
+        }
         var scale = Math.Max(1, Math.Min(viewportWidth / DesignWidth, viewportHeight / DesignHeight));
         return new HudLayout(scale, Math.Max(1, viewportWidth / scale), Math.Max(1, viewportHeight / scale), viewportWidth, viewportHeight);
     }
@@ -29,8 +38,18 @@ public readonly record struct HudLayout(int Scale, int Width, int Height, int Vi
 
     public Point ToLogical(Point pointer)
     {
-        var scale = Math.Max(1, Scale);
-        return new Point(FloorDivide(pointer.X, scale), FloorDivide(pointer.Y, scale));
+        if (PixelScale == Scale)
+            return new Point(FloorDivide(pointer.X, Math.Max(1, Scale)), FloorDivide(pointer.Y, Math.Max(1, Scale)));
+        return new Point((int)MathF.Floor(pointer.X / PixelScale), (int)MathF.Floor(pointer.Y / PixelScale));
+    }
+
+    public Rectangle ToPhysical(Rectangle rect)
+    {
+        var x = (int)MathF.Floor(rect.Left * PixelScale);
+        var y = (int)MathF.Floor(rect.Top * PixelScale);
+        var right = (int)MathF.Ceiling(rect.Right * PixelScale);
+        var bottom = (int)MathF.Ceiling(rect.Bottom * PixelScale);
+        return new Rectangle(x, y, right - x, bottom - y);
     }
 
     public Rectangle PlaceOverlay(Point preferred, int width, int height)

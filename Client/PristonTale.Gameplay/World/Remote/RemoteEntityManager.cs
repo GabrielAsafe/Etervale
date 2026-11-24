@@ -782,6 +782,15 @@ public sealed partial class RemoteEntityManager
         return false;
     }
 
+    internal bool TryGetMobileTarget(ulong entityId, out EntityKind kind)
+    {
+        kind = EntityKind.None;
+        if (entityId == SelfEntityId || !_entities.TryGetValue(entityId, out var entity) || entity.IsDead || _summonOwners.ContainsKey(entityId))
+            return false;
+        kind = entity.Kind;
+        return true;
+    }
+
     public bool TryGetTarget(ulong entityId, out XnaVector3 position, out bool isDead)
     {
         if (_entities.TryGetValue(entityId, out var entity))

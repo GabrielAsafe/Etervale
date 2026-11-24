@@ -7,6 +7,10 @@
 #include "mg_common.h"
 
 #include <SDL.h>
+#if defined(__ANDROID__)
+#include <SDL_vulkan.h>
+void Etervale_Android_RecordTouch(const SDL_Event& e);
+#endif
 #include <cstdlib>
 
 #if _WIN32
@@ -434,6 +438,11 @@ mgbyte MGP_Platform_PollEvent(MGP_Platform* platform, MGP_Event& event_)
 
     while (SDL_PollEvent(&ev) == 1)
     {
+#if defined(__ANDROID__)
+        Etervale_Android_RecordTouch(ev);
+        if (ev.type == SDL_MOUSEMOTION && ev.motion.which == SDL_TOUCH_MOUSEID) continue;
+        if ((ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEBUTTONUP) && ev.button.which == SDL_TOUCH_MOUSEID) continue;
+#endif
         // TODO: We cannot call SDL_GetTicks64 as it is different from
         // SDL_GetTicks() and controller and keyboard events return SDL_GetTicks().
         event_.Timestamp = SDL_GetTicks();
@@ -651,6 +660,14 @@ mgbyte MGP_Platform_PollEvent(MGP_Platform* platform, MGP_Event& event_)
                 event_.Type = MGEventType::WindowResized;
                 event_.Window.Data1 = ev.window.data1;
                 event_.Window.Data2 = ev.window.data2;
+#if defined(__ANDROID__)
+                if (auto* window = SDL_GetWindowFromID(ev.window.windowID))
+                {
+                    int width = 0, height = 0;
+                    SDL_Vulkan_GetDrawableSize(window, &width, &height);
+                    if (width > 0 && height > 0) { event_.Window.Data1 = width; event_.Window.Data2 = height; }
+                }
+#endif
                 return true;
                 break;
             case SDL_WINDOWEVENT_FOCUS_GAINED:
@@ -837,7 +854,40 @@ static mgbyte MGP_Window_CreateNativeWindowInternal(
 
     title = title ? title : "";
 
+#if defined(__ANDROID__)
+    // ETERVALE_ANDROID_SDL_INITIAL_SIZE_V19: MonoGame's initial 800x480
+    // should not determine the Android SDL window's native size.
+    const int initialRequestWidth = width;
+    const int initialRequestHeight = height;
+    SDL_DisplayMode androidDisplay = {};
+    if (SDL_GetCurrentDisplayMode(0, &androidDisplay) == 0 &&
+        androidDisplay.w > 0 && androidDisplay.h > 0)
+    {
+        width = androidDisplay.w;
+        height = androidDisplay.h;
+        SDL_Log("ETERVALE_SDL_WINDOW v19: initial=%dx%d; display=%dx%d",
+                initialRequestWidth, initialRequestHeight, width, height);
+    }
+    else
+    {
+        SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO,
+                    "ETERVALE_SDL_WINDOW v19: display mode unavailable; initial=%dx%d; SDL error=%s",
+                    initialRequestWidth, initialRequestHeight, SDL_GetError());
+    }
+#endif
+
 	window->window = SDL_CreateWindow((const char*)title, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, flags);
+
+#if defined(__ANDROID__)
+    if (window->window != nullptr)
+    {
+        int createdWidth = 0;
+        int createdHeight = 0;
+        SDL_GetWindowSize(window->window, &createdWidth, &createdHeight);
+        SDL_Log("ETERVALE_SDL_WINDOW v19: created=%dx%d; requested=%dx%d",
+                createdWidth, createdHeight, width, height);
+    }
+#endif
 
 	if (window->window == nullptr)
 	{

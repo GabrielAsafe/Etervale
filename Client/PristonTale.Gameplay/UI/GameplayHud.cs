@@ -33,6 +33,15 @@ public sealed partial class GameplayHud : IDisposable
     private readonly ScreenContext _context;
     private readonly HudSprites _sprites;
     private readonly HudPainter _painter;
+    internal MobileControls Mobile { get; } = new();
+    private bool _mobileIme;
+    internal bool MobileTyping => KeyboardCaptured || _countBox.IsOpen || _personalShop.SignOpen || _clanWindow.Typing;
+    internal bool MobileBackAllowed => !PlayerDead && !_context.Presentation.AwaitingConfirmation
+        && (MobileTyping || _chat.Window.Open || BlocksWorld || HoldsPlayer || _settingsOpen || _systemMenu
+            || _inventorySlide.Open || _statusSlide.Open || _skillSlide.Open || _questWindow.Open || _partyWindow.Open || _helpWindow.IsOpen);
+    internal bool MobileOverlayAllowed => !PlayerDead && !BlocksWorld && !SideWindowOpen && !_settingsOpen
+        && !_systemMenu && !_questWindow.Visible && !_partyWindow.Visible && !HoldsPlayer && !MobileTyping
+        && !_context.Presentation.AwaitingConfirmation;
     private readonly HudItemIcons _icons;
     private readonly Dictionary<Guid, string> _itemKeys = new();
     private readonly HudSkillBindings _bindings = new();
@@ -407,7 +416,12 @@ public sealed partial class GameplayHud : IDisposable
         var now = _clock.Elapsed.TotalSeconds;
         var elapsed = now - _lastUpdate;
         _lastUpdate = now;
-        Update(state, Keyboard.GetState(), Mouse.GetState(), elapsed);
+        Update(state, Mobile.Merge(Keyboard.GetState()), Mobile.HudMouse(Mouse.GetState()), elapsed);
+        if (OperatingSystem.IsAndroid() && _mobileIme != MobileTyping)
+        {
+            _mobileIme = MobileTyping;
+            LoginPanel.AndroidKeyboardRequested?.Invoke(_mobileIme);
+        }
     }
 
     internal void Update(OwnerState state, KeyboardState keyboard, MouseState mouse, double elapsedSeconds = 1)
@@ -881,6 +895,7 @@ public sealed partial class GameplayHud : IDisposable
         _restart.Draw(_painter, layout, pointer, RestartOffer?.FieldOpen == true, InCastleField);
         _painter.Flush();
         _notice.Draw(_painter, layout);
+        Mobile.Draw(_painter, layout, MobileOverlayAllowed, MobileBackAllowed);
         _painter.End();
         DrawBellatraShow();
     }
@@ -894,6 +909,8 @@ public sealed partial class GameplayHud : IDisposable
 
     public void Dispose()
     {
+        Mobile.Reset();
+        if (_mobileIme) LoginPanel.AndroidKeyboardRequested?.Invoke(false);
         _portrait.Dispose();
         _skillHud.Dispose();
         _icons.Dispose();

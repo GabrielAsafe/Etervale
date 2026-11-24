@@ -54,7 +54,7 @@ public sealed partial class HudCombat
         }
 
         _plates.Sort(static (left, right) => left.Focus != right.Focus ? (left.Focus ? 1 : -1) : right.Point.Depth.CompareTo(left.Point.Depth));
-        var scale = Math.Max(1, layout.Scale);
+        var scale = layout.PixelScale;
         foreach (var (id, point, _) in _plates)
         {
             var entity = _entities[id];

@@ -28,8 +28,49 @@ internal sealed class DisplayController
         _log = log;
     }
 
+    [System.Runtime.InteropServices.DllImport("mgruntime", EntryPoint = "Etervale_Android_GetDrawableSize", CallingConvention = System.Runtime.InteropServices.CallingConvention.Cdecl)]
+    private static extern int AndroidDrawableSize(out int width, out int height);
+
     public string Apply(ClientSettings requested)
     {
+        if (OperatingSystem.IsAndroid())
+        {
+            // ETERVALE_ROTACAO_LIVRE_V16: dimensoes reais, sem forcar aspect ratio.
+            var mobileMode = GraphicsAdapter.DefaultAdapter.CurrentDisplayMode;
+            var mobileWidth = mobileMode.Width;
+            var mobileHeight = mobileMode.Height;
+            try
+            {
+                if (AndroidDrawableSize(out var drawableWidth, out var drawableHeight) != 0 && drawableWidth > 0 && drawableHeight > 0)
+                {
+                    mobileWidth = drawableWidth;
+                    mobileHeight = drawableHeight;
+                }
+            }
+            catch (EntryPointNotFoundException) { }
+            if (mobileWidth <= 0 || mobileHeight <= 0)
+            {
+                var bounds = _window.ClientBounds;
+                mobileWidth = Math.Max(1, bounds.Width);
+                mobileHeight = Math.Max(1, bounds.Height);
+            }
+            _graphics.PreferredBackBufferWidth = mobileWidth;
+            _graphics.PreferredBackBufferHeight = mobileHeight;
+            _graphics.HardwareModeSwitch = false;
+            _graphics.SynchronizeWithVerticalRetrace = requested.VerticalSync;
+            _graphics.PreferMultiSampling = false;
+            _graphics.ApplyChanges();
+            var actual = _graphics.GraphicsDevice.PresentationParameters;
+            // ETERVALE_ANDROID_VIEWPORT_V14: compare SDL target, backbuffer and HUD viewport.
+            var viewport = _graphics.GraphicsDevice.Viewport;
+            var androidClientBounds = _window.ClientBounds;
+            _log.Info($"[Display] Android target={mobileWidth}x{mobileHeight}; " +
+                $"backbuffer={actual.BackBufferWidth}x{actual.BackBufferHeight}; " +
+                $"viewport={viewport.Width}x{viewport.Height}; client={androidClientBounds.Width}x{androidClientBounds.Height}");
+            var effectiveMobile = $"Android: {actual.BackBufferWidth}x{actual.BackBufferHeight}";
+            _log.Info($"[Display] {effectiveMobile}; drawable requested {mobileWidth}x{mobileHeight}");
+            return effectiveMobile;
+        }
         var width = requested.WindowWidth;
         var height = requested.WindowHeight;
         if (requested.Monitor > PrimaryMonitor)

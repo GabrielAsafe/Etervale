@@ -10,7 +10,7 @@ using Android.Widget;
 namespace EtervaleAndroidGame;
 
 [Activity(Label = "Etervale 3D", MainLauncher = true, Exported = true,
-    ScreenOrientation = ScreenOrientation.Landscape)]
+    ScreenOrientation = ScreenOrientation.Unspecified)]
 public sealed class MainActivity : Activity
 {
     protected override void OnCreate(Bundle? savedInstanceState)
@@ -41,6 +41,13 @@ public sealed class MainActivity : Activity
         column.AddView(status);
         SetContentView(column);
 
+        // ETERVALE_ANDROID_V6_AUTO_START
+        // Arrancar automaticamente, sem exigir um toque no botao do bootstrap.
+        start.Post(() =>
+        {
+            start.PerformClick();
+            start.Visibility = Android.Views.ViewStates.Gone;
+        });
         start.Click += async (_, _) =>
         {
             start.Enabled = false;
@@ -52,6 +59,7 @@ public sealed class MainActivity : Activity
                 EtervaleAndroidContentProvider.Configure(this);
                 // ETERVALE_ANDROID_V5
                 PristonTale.Gameplay.UI.LoginPanel.AndroidKeyboardRequested = EtervaleAndroidSoftKeyboard.SetVisible;
+                PristonTale.Gameplay.UI.Chat.HudChat.AndroidKeyboardRequested = EtervaleAndroidSoftKeyboard.SetVisible;
                 string androidSettingsPath = EtervaleAndroidStartup.PrepareSettings(this);
                 // ETERVALE_ANDROID_SDL_BRIDGE_V2
                 // Abre a Activity SDL que cria SurfaceView, contexto JNI e janela nativa.

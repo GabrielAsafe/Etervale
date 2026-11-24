@@ -50,7 +50,7 @@ public sealed class HudPainter : IDisposable
     public void Begin(HudLayout layout)
     {
         _text.Clear();
-        _transform = Matrix.CreateScale(Math.Max(1, layout.Scale));
+        _transform = Matrix.CreateScale(layout.PixelScale);
         BeginSprites();
     }
 
