@@ -179,6 +179,27 @@ public sealed class GroundLootPresentation(IActorScene scene, PristonActorLoader
         return false;
     }
 
+    // ETERVALE_MOBILE_UI_V32: um drop próximo ao jogador, em terreno já
+    // validado; não inclui pisos muito acima/abaixo nem modelos ainda não pousados.
+    public bool TryFindNearest(Vector3 origin,float maxRadius,out Guid id,out Vector3 position)
+    {
+        id=Guid.Empty;
+        position=default;
+        float nearest=maxRadius*maxRadius;
+        foreach(var entry in _entries.Values)
+        {
+            if(!entry.FloorFound || MathF.Abs(entry.Position.Y-origin.Y)>96f) continue;
+            float dx=entry.Position.X-origin.X;
+            float dz=entry.Position.Z-origin.Z;
+            float distance=dx*dx+dz*dz;
+            if(distance>=nearest)continue;
+            nearest=distance;
+            id=entry.Drop.Id;
+            position=entry.Position;
+        }
+        return id!=Guid.Empty;
+    }
+
     // The drop nearest along x within reach of the origin and within depth of its z.
     public bool FindNear(Vector3 origin, float reach, float depth, out Guid id, out Vector3 position)
     {

@@ -440,7 +440,8 @@ public sealed partial class GameplayHud
             return true;
         }
 
-        if (HudBar.Captures(design) || MinimapShown && HudMinimap.Box(layout).Contains(pointer) || _skillHud.BuffAt(pointer) != 0
+        if ((!OperatingSystem.IsAndroid() && HudBar.Captures(design))
+            || MinimapShown && (Mobile.Enabled ? Mobile.MapBounds(layout) : HudMinimap.Box(layout)).Contains(pointer) // ETERVALE_MOBILE_HUD_EDITOR_V33 || _skillHud.BuffAt(pointer) != 0
             || WindowContains(layout, _inventorySlide, pointer) || WindowContains(layout, _statusSlide, pointer) || WindowContains(layout, _skillSlide, pointer)
             || _skills.MasterBoxShown && HudSkillTreeLayout.MasterBox.Contains(pointer))
         {
@@ -518,6 +519,9 @@ public sealed partial class GameplayHud
         _skillSlide.Open = slide == _skillSlide;
         _skills.CancelTraining();
     }
+
+    // ETERVALE_MOBILE_UI_V32: botão MAPA usa a mesma visibilidade do toggle do HUD original.
+    internal void ToggleMobileMap() => _mapVisible = !_mapVisible;
 
     // The potion belt's boxes, left to right.
     private static readonly Keys[] BeltKeys = [Keys.D1, Keys.D2, Keys.D3];

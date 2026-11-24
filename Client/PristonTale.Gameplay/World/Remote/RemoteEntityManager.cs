@@ -782,6 +782,49 @@ public sealed partial class RemoteEntityManager
         return false;
     }
 
+    // ETERVALE_MOBILE_TARGET_LOOT_V28: enumeração determinística, somente monstros vivos e não invocações.
+    // Não altera o combate nem faz pedidos de rede; chamado apenas ao pressionar ALVO/ATACAR.
+    internal ulong NextMobileMonster(ulong selected, XnaVector3 playerPosition)
+    {
+        var candidates = new List<(ulong Id, float Distance)>();
+        foreach (var (id, entity) in _entities)
+        {
+            if (id==_selfEntityId || entity.Kind!=EntityKind.Monster || entity.IsDead || _summonOwners.ContainsKey(id))
+                continue;
+            var distance=XnaVector3.DistanceSquared(entity.DrawnPosition,playerPosition);
+            if (float.IsFinite(distance)) candidates.Add((id,distance));
+        }
+        if (candidates.Count==0) return 0;
+        candidates.Sort((a,b) =>
+        {
+            var order=a.Distance.CompareTo(b.Distance);
+            return order!=0 ? order : a.Id.CompareTo(b.Id);
+        });
+        for (int i=0;i<candidates.Count;i++)
+            if (candidates[i].Id==selected) return candidates[(i+1)%candidates.Count].Id;
+        return candidates[0].Id;
+    }
+
+    // ETERVALE_MOBILE_HUD_EDITOR_V33: encontra NPC carregado e vivo mais próximo.
+    internal ulong NearestMobileNpc(XnaVector3 origin,float maxDistance)
+    {
+        var nearest=maxDistance*maxDistance;
+        ulong selected=0;
+        foreach(var (id,entity) in _entities)
+        {
+            if(entity.Kind!=EntityKind.Npc || entity.IsDead || id==_selfEntityId)continue;
+            var at=entity.DrawnPosition;
+            if(MathF.Abs(at.Y-origin.Y)>96f)continue;
+            var dx=at.X-origin.X;
+            var dz=at.Z-origin.Z;
+            var squared=dx*dx+dz*dz;
+            if(squared>=nearest)continue;
+            nearest=squared;
+            selected=id;
+        }
+        return selected;
+    }
+
     internal bool TryGetMobileTarget(ulong entityId, out EntityKind kind)
     {
         kind = EntityKind.None;

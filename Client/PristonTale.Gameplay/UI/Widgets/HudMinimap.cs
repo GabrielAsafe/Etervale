@@ -160,9 +160,9 @@ public sealed class HudMinimap
     }
 
     // party: the other members' places, marked red past PartyLimits.NearRange, as the original marks them.
-    public void Draw(HudPainter painter, HudLayout layout, HudWorldView world, IReadOnlyList<Vector3> npcs, IReadOnlyList<Vector3> party, bool hovered)
+    public void Draw(HudPainter painter, HudLayout layout, HudWorldView world, IReadOnlyList<Vector3> npcs, IReadOnlyList<Vector3> party, bool hovered, Rectangle? mobileBox = null) // ETERVALE_MOBILE_HUD_EDITOR_V33
     {
-        var box = Box(layout);
+        var box = mobileBox ?? Box(layout);
         painter.ColorBox(box, 0, 0, 0, 128);
         if (_neighbour is not null)
         {

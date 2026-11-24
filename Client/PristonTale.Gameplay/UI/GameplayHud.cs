@@ -343,6 +343,27 @@ public sealed partial class GameplayHud : IDisposable
         }
     }
 
+    // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34: associação de F por pressão longa no ecrã.
+    internal void BindMobileShortcut(int index)
+    {
+        if(index<0||index>=8)return;
+        var side=_bindings.LastSelectedSide;
+        var skillId=side==PristonTale.Simulation.Skills.SkillMouseUse.Right
+            ? _bindings.RightSkillId : _bindings.LeftSkillId;
+        // A habilidade tocada em SKILLS tem prioridade, inclusive se for RIGHT-only.
+        if(_bindings.TryGetMobileCandidate(out var chosenId,out var chosenSide))
+        {
+            skillId=chosenId;side=chosenSide;
+        }
+        if(!_bindings.Assign(index,skillId,side))
+        {
+            _notice.Show($"F{index+1}: escolhe primeiro uma habilidade em SKILLS.");
+            return;
+        }
+        Mobile.SaveMobileShortcut(index,skillId,side);
+        _notice.Show($"F{index+1}: habilidade associada.");
+    }
+
     public void OpenNpc(ulong entityId) => _npc.Request(entityId);
 
     // A ground item picked up with the inventory open comes to its cursor (HudInventoryController.ExpectPickup).
@@ -518,6 +539,10 @@ public sealed partial class GameplayHud : IDisposable
         {
             _syncedSkills = state.Skills;
             _bindings.SyncLearned(SkillClasses.Get(_class).Skills, state.Skills);
+            // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34: restaurar só habilidades aprendidas e válidas.
+            for(int i=0;i<8;i++)
+                if(Mobile.TryGetMobileShortcut(i,out var id,out var side))
+                    _bindings.Assign(i,id,side);
         }
 
         if (_context.Presentation.AwaitingConfirmation)
@@ -528,8 +553,9 @@ public sealed partial class GameplayHud : IDisposable
             return;
         }
 
-        _hoveredButton = ButtonAt(design);
-        _hoveredToggle = ToggleAt(design);
+        // ETERVALE_MOBILE_HUD_EDITOR_V33: a barra clássica Android já não é visível nem clicável.
+        _hoveredButton = OperatingSystem.IsAndroid() ? null : ButtonAt(design);
+        _hoveredToggle = OperatingSystem.IsAndroid() ? null : ToggleAt(design);
         UpdateHelpPet(state, layout, pointer, design, mouse, _clock.Elapsed.TotalMilliseconds);
         UpdateHelp(state);
         var clicked = mouse.LeftButton == ButtonState.Pressed && _previousMouse.LeftButton == ButtonState.Released;
@@ -621,6 +647,12 @@ public sealed partial class GameplayHud : IDisposable
         _skills.RefreshRanks(_state);
         var hoveredSkill = _skillSlide.FullyOpen && _skillMaster == 0 ? _skills.HoveredSkill(skillOrigin, pointer) : 0;
         _bindings.Update(typing ? default : keyboard, mouse, hoveredSkill);
+        // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34: toque num ícone SKILLS prepara habilidade para pressionar F.
+        // Funciona também em habilidades que só podem usar o botão direito.
+        if(OperatingSystem.IsAndroid() && _skillSlide.FullyOpen && hoveredSkill!=0
+            && mouse.LeftButton==ButtonState.Released && _previousMouse.LeftButton==ButtonState.Pressed
+            && _bindings.PrepareMobileSkill(hoveredSkill))
+            _notice.Show("Habilidade pronta: mantém F1-F8 premido para associar.");
         PointerCaptured = clickTaken || Captures(layout, pointer, design) || _chat.Window.Contains(layout, pointer, SideWindowOpen) || _inventory.Dragging != Guid.Empty || _warehouse.Dragging != Guid.Empty;
         _inventory.PickupLocked = PlayerActing || storedCarried;
         _inventory.ActionStarts = PlayerActionStarts;
@@ -686,7 +718,8 @@ public sealed partial class GameplayHud : IDisposable
         if (MinimapShown)
         {
             Combat.CollectNpcPositions(_minimapNpcs);
-            _minimap.Draw(_painter, layout, World, _minimapNpcs, MinimapParty(), HudMinimap.Box(layout).Contains(pointer));
+            var mapBox=Mobile.Enabled ? Mobile.MapBounds(layout) : HudMinimap.Box(layout); // ETERVALE_MOBILE_HUD_EDITOR_V33
+            _minimap.Draw(_painter, layout, World, _minimapNpcs, MinimapParty(), mapBox.Contains(pointer), mapBox);
         }
 
         Combat.DrawTarget(_painter, layout, TargetId, _context.Presentation.Requested.ClassicTargetHealthBar, _portrait.Texture(TargetId),
@@ -743,10 +776,13 @@ public sealed partial class GameplayHud : IDisposable
 
         _painter.Flush();
         var left = _bindings.LeftSkillId == HudSkillBindings.BasicAttackId;
-        _bar.Draw(_painter, layout, _state, new HudBarView(World.TimeOfDay, World.Running, _mapVisible, left, RightAttackEnabled,
-            _hoveredButton, pressed && _hoveredButton is not null, _hoveredToggle));
-        _inventoryPanel.DrawBelt(_painter, HudInventoryLayout.Origin(layout), _state, _inventory, _icons);
-        _skillHud.DrawSockets(_painter, layout.BottomOffset, _bindings.LeftSkillId, _bindings.RightSkillId, Cooldowns, SkillClockMs);
+        if (!OperatingSystem.IsAndroid()) // ETERVALE_MOBILE_HUD_EDITOR_V33
+        {
+            _bar.Draw(_painter, layout, _state, new HudBarView(World.TimeOfDay, World.Running, _mapVisible, left, RightAttackEnabled,
+                _hoveredButton, pressed && _hoveredButton is not null, _hoveredToggle));
+            _inventoryPanel.DrawBelt(_painter, HudInventoryLayout.Origin(layout), _state, _inventory, _icons);
+            _skillHud.DrawSockets(_painter, layout.BottomOffset, _bindings.LeftSkillId, _bindings.RightSkillId, Cooldowns, SkillClockMs);
+        }
         if (Statuses is not null && SelfId != 0)
         {
             _skillHud.DrawBuffs(_painter, _premiumKeeps.With(Statuses.For(SelfId), PremiumTimers, SkillClockMs), SkillClockMs);
@@ -759,7 +795,7 @@ public sealed partial class GameplayHud : IDisposable
         _skillHud.DrawQuestTimer(_painter, _questView, QuestTimeLeftMs);
 
         StringEffect.Draw(_painter, layout);
-        _bar.DrawHoverText(_painter, layout, _state, pointer);
+        if (!OperatingSystem.IsAndroid()) _bar.DrawHoverText(_painter, layout, _state, pointer);
         if (_systemMenu)
         {
             HudSystemMenu.Draw(_painter, layout, pointer);
@@ -895,7 +931,7 @@ public sealed partial class GameplayHud : IDisposable
         _restart.Draw(_painter, layout, pointer, RestartOffer?.FieldOpen == true, InCastleField);
         _painter.Flush();
         _notice.Draw(_painter, layout);
-        Mobile.Draw(_painter, layout, MobileOverlayAllowed, MobileBackAllowed);
+        Mobile.Draw(_painter, layout, MobileOverlayAllowed, MobileBackAllowed, _state); // ETERVALE_MOBILE_HUD_EDITOR_V33
         _painter.End();
         DrawBellatraShow();
     }

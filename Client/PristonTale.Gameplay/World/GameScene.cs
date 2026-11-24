@@ -466,7 +466,10 @@ public sealed partial class GameScene : IDisposable, IHudPortraitScene
         if (_camera != null && _activeField != null)
         {
             if (OperatingSystem.IsAndroid() && CameraInputEnabled && !MovementLocked && !KeyboardCaptured)
+            {
                 _camera.ApplyMobileOrbit(MobileOrbit, frameDt);
+                _camera.ApplyMobileZoom(MobileZoom); // ETERVALE_MOBILE_INPUT_V24
+            }
             UpdateCamera(gameTime);
         }
 

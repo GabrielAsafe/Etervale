@@ -34,7 +34,12 @@ public sealed partial class GameScene
 {
     internal Vector2 MobileMove { get; set; }
     internal Vector2 MobileOrbit { get; set; }
+    internal float MobileZoom { get; set; } // ETERVALE_MOBILE_INPUT_V24
     internal bool MobileActionOnly { get; set; }
+    internal Point? MobileTap { get; set; } // ETERVALE_MOBILE_TARGET_LOOT_V28
+    internal bool MobileSelectNext { get; set; }
+    internal bool MobileLootNearest { get; set; }
+    internal bool MobileTalkNearest { get; set; } // ETERVALE_MOBILE_HUD_EDITOR_V33 // ETERVALE_MOBILE_UI_V32
     private bool _mobileMoving;
 
     private void UpdateMobileMovement(MouseState mouse)
@@ -100,6 +105,27 @@ public sealed partial class GameScene
             return;
         }
 
+        // ETERVALE_MOBILE_TARGET_LOOT_V28: processa seleção e loot somente quando o cenário está livre.
+        if (OperatingSystem.IsAndroid() && CameraInputEnabled && !MovementLocked && !KeyboardCaptured)
+        {
+            if (MobileSelectNext && _remote is not null)
+            {
+                var target=_remote.NextMobileMonster(_targetSelection.FrameId,_playerBody.Position);
+                if (target!=0)
+                {
+                    if (_attackInput.TargetId!=0 && _attackInput.TargetId!=target) ClearAttackTarget();
+                    _targetSelection.Trace(target);
+                }
+            }
+            if (MobileTap is Point screenPoint) SelectMobileWorldPoint(screenPoint);
+        }
+        // ETERVALE_MOBILE_UI_V32: recolha explícita sem clique ou movimento indiscriminado.
+        if (OperatingSystem.IsAndroid() && MobileLootNearest && !MovementLocked
+            && !KeyboardCaptured && CameraInputEnabled && !WorldClicksBlocked)
+            TryMobileLootNearest();
+        if (OperatingSystem.IsAndroid() && MobileTalkNearest && !MovementLocked
+            && !KeyboardCaptured && CameraInputEnabled && !WorldClicksBlocked)
+            TryMobileTalkNearest(); // ETERVALE_MOBILE_HUD_EDITOR_V33
         if (MovementLocked && (_hasMoveTarget || _followCursor))
         {
             _followCursor = false;
@@ -232,6 +258,66 @@ public sealed partial class GameScene
         TryGetFloorHeightNear(new Vector3(x, 0, z), referenceHeight, out height)
         || TryGetFloorHeightNear(new Vector3(x, 0, z), _playerBody.Height + GroundTraversal.VisualOffset, out height);
 
+    // ETERVALE_MOBILE_TARGET_LOOT_V28: o item usa a mesma aproximação/validação de TryPickLoot.
+    // O monstro recebe frame de seleção, sem ataque nem clique no chão.
+    private void SelectMobileWorldPoint(Point point)
+    {
+        var mouse = new MouseState(point.X,point.Y,0,
+            ButtonState.Released,ButtonState.Released,ButtonState.Released,
+            ButtonState.Released,ButtonState.Released);
+        if (TryPickLoot(mouse)) return;
+        if (_remote is null || !TryCursorRay(mouse,out var ray)
+            || !_remote.TryPick(ray,_remote.SelfEntityId,out var id,out var kind)) return;
+        if (kind==EntityKind.Monster || kind==EntityKind.Player && Fights(id))
+        {
+            if (_attackInput.TargetId!=0 && _attackInput.TargetId!=id) ClearAttackTarget();
+            _targetSelection.Trace(id);
+        }
+        else if (kind==EntityKind.Npc || kind==EntityKind.Player)
+        {
+            // Dialogo e comercio seguem o fluxo normal da seleção por rato.
+            TryPickAttackTarget(mouse);
+        }
+    }
+
+    // ETERVALE_MOBILE_UI_V32: encontra apenas drops próximos, e aproveita
+    // o mesmo caminho de aproximação e a mesma validação usados pelo rato.
+    private bool TryMobileLootNearest()
+    {
+        if (_groundLoot is null || _lootInteraction is null || _lootInteraction.Busy || _playerBody is null)
+            return false;
+        if (!_groundLoot.TryFindNearest(PlayerFeet,240f,out var id,out var position))
+            return false;
+        if (!GroundTraversal.CanReachSurface(PlayerFeet,position,_groundFloorQuery))
+            return false;
+        ClearAttackTarget();
+        _npcTargetId=0;
+        _lootInteraction.Select(id);
+        _moveTarget=new Vector2(position.X,position.Z);
+        _hasMoveTarget=true;
+        _reports.Request();
+        return true;
+    }
+
+    // ETERVALE_MOBILE_HUD_EDITOR_V33: o NPC aproxima-se e abre diálogo pelo fluxo normal.
+    // Botão FALAR não envia um clique de rato nem uma ordem arbitrária ao servidor.
+    private bool TryMobileTalkNearest()
+    {
+        if(_remote is null || _playerBody is null || SelfCasting)return false;
+        var id=_targetSelection.FrameId;
+        if(id==0 || !_remote.TryGetMobileTarget(id,out var kind) || kind!=EntityKind.Npc)
+            id=_remote.NearestMobileNpc(_playerBody.Position,640f);
+        if(id==0)return false;
+        _lootInteraction?.Cancel();
+        ClearAttackTarget();
+        _npcTargetId=id;
+        _approach=ApproachKind.Npc;
+        _npcMoveSent=false;
+        _targetSelection.Trace(id);
+        StopPredictedMovement();
+        return true;
+    }
+
     private bool TryPickLoot(MouseState mouse)
     {
         if (_groundLoot is null || _lootInteraction.Busy || !TryCursorRay(mouse, out var ray)
@@ -333,9 +419,15 @@ public sealed partial class GameScene
         }
         ulong entityId;
         EntityKind kind;
-        if (MobileActionOnly && _remote.TryGetMobileTarget(_targetSelection.FrameId, out kind))
+        if (MobileActionOnly)
         {
             entityId = _targetSelection.FrameId;
+            if (!_remote.TryGetMobileTarget(entityId, out kind) || kind!=EntityKind.Monster)
+            {
+                // ETERVALE_MOBILE_TARGET_LOOT_V28: ATACAR seleciona um alvo sem depender do cursor central.
+                entityId = _remote.NextMobileMonster(0,_playerBody.Position);
+                if (entityId==0 || !_remote.TryGetMobileTarget(entityId,out kind)) return false;
+            }
         }
         else if (!TryCursorRay(mouse, out var ray) || !_remote.TryPick(ray, _remote.SelfEntityId, out entityId, out kind))
         {

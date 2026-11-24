@@ -15,6 +15,23 @@ public sealed class HudSkillBindings
     // The F1 to F8 keys.
     public const int ShortcutCount = 8;
     private readonly HudSkillShortcut[] _shortcuts = new HudSkillShortcut[ShortcutCount];
+    public SkillMouseUse LastSelectedSide { get; private set; } = SkillMouseUse.Left; // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34
+    private uint _mobileChoiceId;
+    private SkillMouseUse _mobileChoiceSide;
+    // Habilidade selecionada tocando num ícone; não requer rato + tecla F.
+    public bool PrepareMobileSkill(uint skillId)
+    {
+        var side=CanSelect(skillId,SkillMouseUse.Right)?SkillMouseUse.Right
+            : CanSelect(skillId,SkillMouseUse.Left)?SkillMouseUse.Left:SkillMouseUse.None;
+        if(side==SkillMouseUse.None)return false;
+        _mobileChoiceId=skillId;_mobileChoiceSide=side;
+        return Select(skillId,side);
+    }
+    public bool TryGetMobileCandidate(out uint skillId,out SkillMouseUse side)
+    {
+        skillId=_mobileChoiceId;side=_mobileChoiceSide;
+        return skillId!=0 && CanSelect(skillId,side);
+    }
     private KeyboardState _previousKeys;
     private MouseState _previousMouse;
     private uint _pressedSkill;
@@ -99,6 +116,7 @@ public sealed class HudSkillBindings
             RightSkillId = skillId;
         }
 
+        LastSelectedSide=side; // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34
         return true;
     }
 

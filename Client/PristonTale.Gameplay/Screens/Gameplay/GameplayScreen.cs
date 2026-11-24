@@ -166,13 +166,26 @@ public sealed class GameplayScreen : GameScreen
         else _hud.Mobile.Update(Context.GraphicsDevice.Viewport, gameTime,
             Context.IsWindowActive,
             _hud.MobileOverlayAllowed, _hud.MobileTyping, backAvailable: _hud.MobileBackAllowed);
+        // ETERVALE_MOBILE_INPUT_V24: CONFIG no HUD mobile usa as definicoes globais do Etervale.
+        if (_hud.Mobile.SettingsRequested) _hud.OpenSettings();
+        if (_hud.Mobile.ShortcutBindRequested >= 0) _hud.BindMobileShortcut(_hud.Mobile.ShortcutBindRequested); // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34
         if (_hud.Mobile.PanelCloseRequested) _hud.ClosePanel();
+        // ETERVALE_MOBILE_HUD_EDITOR_V33: botão FALAR partilha o caminho de aproximação NPC do rato.
+        if (_hud.Mobile.MapRequested) _hud.ToggleMobileMap(); // ETERVALE_MOBILE_UI_V32
         if (_hud.Mobile.CloseRequested && !Context.Presentation.AwaitingConfirmation) HandleEscape();
         _hud.Update(_scene.Owner);
+        // ETERVALE_MOBILE_TARGET_LOOT_V28: toque no mundo não é um clique de rato.
+        _scene.MobileTap = _hud.MobileOverlayAllowed && !_hud.Mobile.MenuCaptures ? _hud.Mobile.WorldTap : null;
+        _scene.MobileSelectNext = _hud.MobileOverlayAllowed && !_hud.Mobile.MenuCaptures && _hud.Mobile.TargetNextRequested;
+        _scene.MobileTalkNearest = _hud.MobileOverlayAllowed && !_hud.Mobile.MenuCaptures && _hud.Mobile.TalkRequested; // ETERVALE_MOBILE_HUD_EDITOR_V33
+        _scene.MobileLootNearest = _hud.MobileOverlayAllowed && !_hud.Mobile.MenuCaptures && _hud.Mobile.LootRequested; // ETERVALE_MOBILE_UI_V32
         _scene.MobileMove = _hud.MobileOverlayAllowed && !_hud.Mobile.MenuCaptures ? _hud.Mobile.Movement : Vector2.Zero;
         _scene.MobileOrbit = _hud.MobileOverlayAllowed && !_hud.Mobile.MenuCaptures ? _hud.Mobile.Orbit : Vector2.Zero;
+        _scene.MobileZoom = _hud.MobileOverlayAllowed && !_hud.Mobile.MenuCaptures ? _hud.Mobile.PinchZoomDelta : 0f;
         _scene.MobileActionOnly = _hud.Mobile.WorldActionOnly;
-        _scene.PointerCaptured = _hud.PointerCaptured && !(_hud.Mobile.WorldActionOnly && _hud.MobileOverlayAllowed);
+        // ETERVALE_MOBILE_TAP_UI_V27: toque em menus só é entregue ao HUD, nunca ao cenário.
+        _scene.PointerCaptured = (_hud.PointerCaptured || _hud.Mobile.UiTouchOnly)
+            && !(_hud.Mobile.WorldActionOnly && _hud.MobileOverlayAllowed);
         _scene.MovementLocked = _hud.HoldsPlayer || _hud.Mobile.MenuCaptures || (OperatingSystem.IsAndroid() && (!Context.IsWindowActive || _hud.MobileTyping || Context.Presentation.AwaitingConfirmation || (_hud.MobileBackAllowed && !_hud.MobileOverlayAllowed)));
         _scene.KeyboardCaptured = _hud.KeyboardCaptured || (OperatingSystem.IsAndroid() && (_hud.MobileTyping || !Context.IsWindowActive));
         _hud.Chat.SelfId = _scene.SelfEntityId;

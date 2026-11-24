@@ -161,6 +161,17 @@ public sealed class PristonCamera
         _pitch = MathHelper.Clamp(_pitch - Math.Clamp(axis.Y, -1f, 1f) * dt, _settings.MinPitch, _settings.MaxPitch);
     }
 
+    // ETERVALE_MOBILE_INPUT_V24: distancia entre dois dedos em unidades do HUD.
+    // Normalizada ao intervalo valido da camera, sem alterar a roda do rato desktop.
+    public void ApplyMobileZoom(float deltaLogicalPixels)
+    {
+        if (!float.IsFinite(deltaLogicalPixels) || deltaLogicalPixels == 0f) return;
+        var range = _settings.MaxDistance - _settings.MinDistance;
+        if (range <= 0f) return;
+        _distance = MathHelper.Clamp(_distance - Math.Clamp(deltaLogicalPixels, -35f, 35f) * range / 500f,
+            _settings.MinDistance, _settings.MaxDistance);
+    }
+
     private void EnsureProjection(GraphicsDevice graphicsDevice, float fieldOfViewRadians)
     {
         var width = Math.Max(1, graphicsDevice.Viewport.Width);
