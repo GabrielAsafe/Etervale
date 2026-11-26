@@ -26,6 +26,7 @@ namespace StateCacheRepro
     {
         private const int Size = 4;
         private readonly int _frames;
+        private readonly GraphicsDeviceManager _graphics;
         private readonly Random _random = new(20261013);
         private RenderTarget2D? _target;
         private RenderTarget2D? _other;
@@ -37,7 +38,7 @@ namespace StateCacheRepro
         public ReproGame(int frames)
         {
             _frames = frames;
-            _ = new GraphicsDeviceManager(this) { PreferredBackBufferWidth = 64, PreferredBackBufferHeight = 64 };
+            _graphics = new GraphicsDeviceManager(this) { PreferredBackBufferWidth = 64, PreferredBackBufferHeight = 64 };
             Content.RootDirectory = "Content";
         }
 
@@ -51,6 +52,15 @@ namespace StateCacheRepro
 
         protected override void Draw(GameTime gameTime)
         {
+            // Exercise recreation while the ordinary stress test continues drawing and checking pixels.
+            if (_frame > 0 && _frame <= Math.Min(_frames, 8))
+            {
+                _graphics.PreferredBackBufferWidth = _frame % 2 == 0 ? 64 : 160;
+                _graphics.PreferredBackBufferHeight = _frame % 2 == 0 ? 64 : 120;
+                _graphics.ApplyChanges();
+                Console.WriteLine($"resize request {_frame}: {_graphics.PreferredBackBufferWidth}x{_graphics.PreferredBackBufferHeight}");
+            }
+
             if (_frame == 0)
             {
                 CollisionTest();

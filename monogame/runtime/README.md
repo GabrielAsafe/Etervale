@@ -227,3 +227,7 @@ See [render target MSAA capabilities](../issues/035-render-target-msaa-capabilit
 ## Native graphics resource finalization
 
 See [graphics-thread finalization](../issues/036-native-resource-finalization.md).
+
+## Swapchain resource lifetime
+
+See [swapchain resource lifetime](../issues/037-swapchain-resource-lifetime.md).

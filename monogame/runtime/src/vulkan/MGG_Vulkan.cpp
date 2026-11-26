@@ -22,6 +22,7 @@
 #define MGVK_UNREACHABLE() do { assert(0); __builtin_unreachable(); } while (0)
 #endif
 
+#include <cstdlib>
 #include <unordered_map>
 #include <algorithm>
 #include <map>
@@ -666,7 +667,7 @@ static void MGVK_DestroyFrameResources(MGG_GraphicsDevice* device, FrameCounter 
 static void MGVK_UpdateRenderPass(MGG_GraphicsDevice* device, FrameCounter currentFrame, VkCommandBuffer commandBuffer);
 static VkCommandBuffer MGVK_BeginNewCommandBuffer(MGG_GraphicsDevice* device, VkCommandPool pool = VK_NULL_HANDLE);
 static void MGVK_ExecuteAndFreeCommandBuffer(MGG_GraphicsDevice* device, VkCommandBuffer commandBuffer, VkCommandPool pool = VK_NULL_HANDLE);
-static void MGVK_ProcessDescriptorCaches(MGG_GraphicsDevice* device, FrameCounter currentFrame);
+static void MGVK_ProcessDescriptorCaches(MGG_GraphicsDevice* device, FrameCounter currentFrame, bool freeAll = false);
 static void MGVK_CmdTransitionImageLayout(
 	VkCommandBuffer cmd,
 	VkImage image,
@@ -1789,11 +1790,20 @@ static void MGVK_CleanupSwapChain(MGG_GraphicsDevice* device)
 {
 	{
 		std::lock_guard lock(device->queueMutex);
-		vkQueueWaitIdle(device->queue);
+		const auto idle = vkQueueWaitIdle(device->queue);
+		if (idle != VK_SUCCESS)
+		{
+			fprintf(stderr, "Swapchain queue idle failed: %d\n", (int)idle);
+			std::abort();
+		}
 	}
 
 	// Destroy all the frame resources.
 	device->pipelineState.targets = nullptr;
+	device->pipelineStateDirty = true;
+	device->renderTargetDirty = true;
+	if (device->targets.targets[0] && device->targets.targets[0]->isSwapchain)
+		device->targets = MGVK_TargetSet{};
 
 	// Destroy framebuffers and render passes that are dependent on the swapchain.
 	// We iterate this way because we are removing elements from the map.
@@ -1821,7 +1831,8 @@ static void MGVK_CleanupSwapChain(MGG_GraphicsDevice* device)
 					return s.targets == targetSetCache;
 				});
 
-			// This cache entry uses the swapchain, so it's safe to destroy.
+			// Framebuffers must be released before the attachment views.
+			vkDestroyFramebuffer(device->device, targetSetCache->framebuffer, nullptr);
 			for (int i = 0; i < MGVK_NUM_TARGETS; ++i)
 			{
 				auto& view = targetSetCache->arraySlicesViews[i];
@@ -1830,7 +1841,6 @@ static void MGVK_CleanupSwapChain(MGG_GraphicsDevice* device)
 				}
 			}
 			vkDestroyRenderPass(device->device, targetSetCache->renderPass, nullptr);
-			vkDestroyFramebuffer(device->device, targetSetCache->framebuffer, nullptr);
 			delete targetSetCache;
 
 			// Erase the element and get an iterator to the next one.
@@ -1844,12 +1854,6 @@ static void MGVK_CleanupSwapChain(MGG_GraphicsDevice* device)
 		}
 	}
 
-	if (device->swapchain != VK_NULL_HANDLE)
-	{
-		vkDestroySwapchainKHR(device->device, device->swapchain, nullptr);
-		device->swapchain = VK_NULL_HANDLE;
-	}
-
 	// Cleanup the swap chain images.
 	for (size_t i = 0; i < device->swapchainCount; i++)
 	{
@@ -1860,9 +1864,8 @@ static void MGVK_CleanupSwapChain(MGG_GraphicsDevice* device)
 		if (chain == nullptr)
 			continue;
 
-		// Note the image is freed by vkDestroySwapchainKHR.
+		// Swapchain images belong to Vulkan, not the VMA allocator.
 		vkDestroyImageView(device->device, chain->target_view, nullptr);
-		vmaFreeMemory(device->allocator, chain->allocation);
 
 		// Cleanup MSAA resolve image.
 		if (chain->msImage != nullptr)
@@ -1879,6 +1882,12 @@ static void MGVK_CleanupSwapChain(MGG_GraphicsDevice* device)
 		}
 
 		delete chain;
+	}
+
+	if (device->swapchain != VK_NULL_HANDLE)
+	{
+		vkDestroySwapchainKHR(device->device, device->swapchain, nullptr);
+		device->swapchain = VK_NULL_HANDLE;
 	}
 }
 
@@ -2270,6 +2279,9 @@ void MGVK_RecreateSwapChain(
 	// including display changes and refresh rates.
 	if (swapchainCount != device->swapchainCount)
 	{
+		// All old frame submissions are idle. Recycle descriptors before replacing uniform buffers.
+		MGVK_ProcessDescriptorCaches(device, device->frame, true);
+
 		// Free any existing swapchain frame info and recreate it.
 		if (device->swapchains.size() > 0)
 		{
@@ -2278,6 +2290,8 @@ void MGVK_RecreateSwapChain(
 				// TODO: Should we wait for fences here or is vkDeviceWaitIdle enough?
 
 				auto& frame = device->frames[i];
+				MGVK_CollectFrameCapture(device, i);
+				vkFreeCommandBuffers(device->device, device->cmdPool, 1, &frame.commandBuffer);
 				vkDestroySemaphore(device->device, frame.imageAcquiredSemaphore, nullptr);
 				vkDestroyFence(device->device, frame.completedFence, nullptr);
 				if (frame.uniforms)
@@ -2292,13 +2306,8 @@ void MGVK_RecreateSwapChain(
 			device->swapchains.clear();
 		}
 
-		// Since we know that all rendering has stopped it is
-		// safe to free all the descriptors and let them recreate
-		// on the next draw.  This removes all flicker caused by
-		// bad descriptor caches.
-		MGVK_ProcessDescriptorCaches(device, 0);
-
 		device->swapchainCount = swapchainCount;
+		device->frameIndex = device->frame % device->swapchainCount;
 		device->freeFrames = device->swapchainCount + 1;
 
 		VkCommandBufferAllocateInfo comBufferInfo =
@@ -2484,7 +2493,7 @@ mgbyte MGG_GraphicsDevice_ResizeSwapchain(
 		return 1;
 	}
 
-	bool isSwapchainBound = device->targets.targets[0] != nullptr &&
+	bool isSwapchainBound = device->targets.targets[0] == nullptr ||
 		device->targets.targets[0]->isSwapchain;
 
 	// Etervale fork: the window manager resizes the window in the middle of a frame (a window taller than the work area).
@@ -2535,7 +2544,7 @@ mgbyte MGG_GraphicsDevice_ResizeSwapchain(
 }
 
 
-static void MGVK_ProcessDescriptorCaches(MGG_GraphicsDevice* device, FrameCounter currentFrame)
+static void MGVK_ProcessDescriptorCaches(MGG_GraphicsDevice* device, FrameCounter currentFrame, bool freeAll)
 {
 	// Here we go thru the shaders and move any
 	// descriptors that haven't been used in a few
@@ -2555,7 +2564,7 @@ static void MGVK_ProcessDescriptorCaches(MGG_GraphicsDevice* device, FrameCounte
 		for (; pair != usedSets.end();)
 		{
 			auto diff = currentFrame - pair->second->frame;
-			if (diff < device->freeFrames)
+			if (!freeAll && diff < device->freeFrames)
 			{
 				pair++;
 				continue;
@@ -3104,6 +3113,11 @@ void MGG_GraphicsDevice_Present(MGG_GraphicsDevice* device, mgint currentFrame, 
 		submitInfo.signalSemaphoreCount = 1;
 		submitInfo.pSignalSemaphores = &swap.renderCompleteSemaphore;
 		res = vkQueueSubmit(device->queue, 1, &submitInfo, frame.completedFence);
+		if (res != VK_SUCCESS)
+		{
+			fprintf(stderr, "Swapchain submission failed: %d\n", (int)res);
+			std::abort();
+		}
 
 		VkPresentInfoKHR presentInfo = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
 		presentInfo.waitSemaphoreCount = 1;
@@ -3120,6 +3134,10 @@ void MGG_GraphicsDevice_Present(MGG_GraphicsDevice* device, mgint currentFrame, 
 		std::lock_guard lock(device->transferMutex);
 		MGVK_CleanupPendingTransfers(device);
 	}
+
+	// Complete bookkeeping before recreation can replace the frame vector.
+	frame.image_index = -1;
+	frame.is_rendering = true;
 
 	if (res == VK_ERROR_OUT_OF_DATE_KHR)
 	{
@@ -3141,9 +3159,6 @@ void MGG_GraphicsDevice_Present(MGG_GraphicsDevice* device, mgint currentFrame, 
 	{
 		VK_CHECK_RESULT(res);
 	}
-
-	frame.image_index = -1;
-	frame.is_rendering = true;
 
 	// Etervale fork: buffers discarded this frame wait in the pending list until no frame in flight can read them
 	// (MGVK_RecycleDiscardedBuffers). Upstream moved them to the free list one Present later, while with three or more
