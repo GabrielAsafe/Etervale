@@ -80,6 +80,18 @@ public sealed class OpeningScreen : GameScreen
             return;
         }
 
+#if DEBUG
+        if (!_loginRevealed && AndroidRegressionSession.HasLogin)
+        {
+            _loginRevealed = true;
+            _lastKeyboard = keyboard;
+            return;
+        }
+        if (AndroidRegressionSession.HasLogin && !_mobileLoginDrawn)
+        {
+            return;
+        }
+#endif
         if (!_loginRevealed)
         {
             if (AnyKeyPressed(keyboard, _lastKeyboard) || _cinematic?.IsOver == true

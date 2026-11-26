@@ -31,6 +31,24 @@ internal sealed class OpeningLoginController : IDisposable
     public LoginResult Update(in KeyboardState keyboard, in KeyboardState lastKeyboard, float dt)
     {
         var typed = _context.TypedText.Drain();
+#if DEBUG
+        if (_phase == Phase.Login && AndroidRegressionSession.TakeLogin() is { } request)
+        {
+            _login.Account.Clear();
+            _login.Password.Clear();
+            _login.Account.Focused = true;
+            _login.Password.Focused = false;
+            _login.Account.Update(request.Account.AsSpan(), 0);
+            _login.Account.Focused = false;
+            _login.Password.Focused = true;
+            _login.Password.Update(request.Password.AsSpan(), 0);
+            _login.Password.Focused = false;
+            AndroidRegressionSession.Mark("login_submitted");
+            BeginLogin();
+            _login.Password.Clear();
+            return LoginResult.None;
+        }
+#endif
         if (_phase == Phase.Login && _login.Update(keyboard, lastKeyboard, typed, dt, _context.GraphicsDevice.Viewport) == LoginIntent.SubmitLogin)
         {
             BeginLogin();
@@ -70,6 +88,13 @@ internal sealed class OpeningLoginController : IDisposable
         }
 
         var succeeded = _loginTask.IsCompletedSuccessfully && _loginTask.Result.Ok;
+#if DEBUG
+        AndroidRegressionSession.Mark(succeeded ? "login_succeeded" : "failed_login");
+        if (!succeeded)
+        {
+            AndroidRegressionSession.CancelSelection();
+        }
+#endif
         if (!succeeded)
         {
             _login.Status = _loginTask.IsCompletedSuccessfully

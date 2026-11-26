@@ -65,6 +65,12 @@ public class Game1 : Game
         MobileDiagnosticTrace.Mark("presentation_configured");
         _client = new GameClient(GraphicsDevice, Content, ResolveAssetRoot(), ResolveServerAddress(_presentation.Requested.ServerAddress), _presentation);
         _client.LoadContent();
+#if DEBUG
+        if (PristonTale.Gameplay.Screens.Framework.AndroidRegressionSession.Active)
+        {
+            _client.DiagnosticsShown = true;
+        }
+#endif
         MobileDiagnosticTrace.Mark("game_load_content_finished");
         // SDL/desktop cursor scaling can blur the original 32x32 TGA; the client draws it with PointClamp.
         IsMouseVisible = !_client.HasGameCursor;

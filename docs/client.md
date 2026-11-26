@@ -75,6 +75,14 @@ panel is visible, using the most recent 30 frames and the scene, HUD and rendere
 GPU-driver waits). Capture both tags with `adb logcat -v threadtime -s ETERVALE_BOOT:I ETERVALE_PERF:I`.
 The desktop console logger and rendering settings are unchanged.
 
+For Android Debug-only end-to-end tests, the ADB host can supply a one-shot request in the app-private files directory
+using `run-as`. The request is deleted before use and is never logged. The opening screen reveals the existing login
+form, the login controller uses the normal text-field rules and authentication, and character selection waits for the
+real roster preparation before entering the named character through the normal backend. No account creation or
+character creation/deletion is automated. Startup markers identify test progress; metrics are enabled automatically.
+Release builds exclude the request reader and test hooks. The host runner must use a dedicated test account, remove
+any unconsumed request on exit, and never put credentials in command arguments, logs or committed settings.
+
 ### Asset discovery
 
 - `Game1.ResolveAssetRoot` walks up from `AppContext.BaseDirectory` and returns the first ancestor's `assets/`

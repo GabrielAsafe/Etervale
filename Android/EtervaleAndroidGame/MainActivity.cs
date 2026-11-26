@@ -67,6 +67,9 @@ public sealed class MainActivity : Activity
                 PristonTale.Gameplay.UI.Chat.HudChat.AndroidKeyboardRequested = EtervaleAndroidSoftKeyboard.SetVisible;
                 string androidSettingsPath = EtervaleAndroidStartup.PrepareSettings(this);
                 MobileDiagnosticTrace.Mark("settings_prepared");
+#if DEBUG
+                PristonTale.Gameplay.Screens.Framework.AndroidRegressionSession.LoadOnce(FilesDir!.AbsolutePath);
+#endif
                 // ETERVALE_ANDROID_SDL_BRIDGE_V2
                 // Abre a Activity SDL que cria SurfaceView, contexto JNI e janela nativa.
                 // Espera inicializacao da Activity antes de entrar no Game1.Run().

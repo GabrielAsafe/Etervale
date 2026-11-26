@@ -59,6 +59,9 @@ public sealed class CharacterSelectScreen : GameScreen
 
     private int _hoveredIndex = -1;
     private int _selectedIndex = -1;
+#if DEBUG
+    private bool _regressionRosterReady;
+#endif
     private bool _hoverNewCharacter;
 
     private CharacterBrood _chosenBrood;
@@ -239,6 +242,10 @@ public sealed class CharacterSelectScreen : GameScreen
         }
 
         Context.Log.Error("[CharSelect] character-list request failed", _rosterTask.Exception?.GetBaseException());
+#if DEBUG
+        AndroidRegressionSession.Mark("failed_roster");
+        AndroidRegressionSession.CancelSelection();
+#endif
         _rosterTask = null;
         _errorMessage = ClientText.Get("CharSelect.LoadFailed");
         _busy = Busy.None;
@@ -255,11 +262,19 @@ public sealed class CharacterSelectScreen : GameScreen
         if (_rosterPreparationTask.IsCompletedSuccessfully)
         {
             BuildCharacters(_pendingRoster);
+#if DEBUG
+            _regressionRosterReady = true;
+            AndroidRegressionSession.Mark("roster_ready");
+#endif
             _errorMessage = string.Empty;
         }
         else
         {
             Context.Log.Error("[CharSelect] roster actor preparation failed", _rosterPreparationTask.Exception?.GetBaseException());
+#if DEBUG
+            AndroidRegressionSession.Mark("failed_roster_assets");
+            AndroidRegressionSession.CancelSelection();
+#endif
             _errorMessage = ClientText.Get("CharSelect.ModelsFailed");
         }
 
@@ -278,6 +293,24 @@ public sealed class CharacterSelectScreen : GameScreen
 
     private void UpdateCharacterSelect(MouseState mouse)
     {
+#if DEBUG
+        if (_regressionRosterReady && AndroidRegressionSession.TakeCharacter() is { } character)
+        {
+            for (var index = 0; index < _scene.RosterCount; index++)
+            {
+                if (string.Equals(_scene.RosterSummary(index).Name, character, StringComparison.OrdinalIgnoreCase))
+                {
+                    _selectedIndex = index;
+                    AndroidRegressionSession.Mark("character_selected");
+                    BeginEnterWorld();
+                    return;
+                }
+            }
+
+            AndroidRegressionSession.Mark("failed_character_not_found");
+            return;
+        }
+#endif
         var cursor = new Vector2(mouse.X, mouse.Y);
         _hoveredIndex = _scene.PickRoster(cursor, Context.GraphicsDevice.Viewport);
         _hoverNewCharacter = HasFreeSlot && CharSelectLayout.NewCharHotspot(Context.GraphicsDevice.Viewport).Contains(mouse.X, mouse.Y);
@@ -400,6 +433,9 @@ public sealed class CharacterSelectScreen : GameScreen
         _errorMessage = _enterTask.IsCompletedSuccessfully
             ? ClientText.Get("CharSelect.EnterFailure." + _enterTask.Result.Failure)
             : ClientText.Get("CharSelect.Unreachable");
+#if DEBUG
+        AndroidRegressionSession.Mark("failed_enter_world");
+#endif
         _enterTask = null;
         _busy = Busy.None;
         _state = State.CharacterSelect;
