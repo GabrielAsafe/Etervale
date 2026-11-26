@@ -17,13 +17,16 @@ public sealed class FramePacer
         }
 
         var interval = Math.Max(1, (long)Math.Ceiling((double)frequency / limit));
-        if (_limit != limit || _deadline == 0 || now - _deadline >= interval)
+        if (_limit != limit || _deadline == 0)
         {
+            // The elapsed work of the first frame is unknown; start the cadence without another full wait.
+            _limit = limit;
             _deadline = now;
+            return now;
         }
 
-        _limit = limit;
-        _deadline += interval;
+        // An over-budget frame has already spent its interval. Re-anchor without sleeping or catching up.
+        _deadline = Math.Max(now, _deadline + interval);
         return _deadline;
     }
 }

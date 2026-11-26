@@ -286,11 +286,37 @@ internal static class ClientSettingsTests
         var pacer = new FramePacer();
         const long frequency = 1_000_000;
         var deadline = pacer.Schedule(frequency, frequency, 100);
-        Assert.True(deadline == 1_010_000, "initial frame deadline is wrong");
+        Assert.True(deadline == 1_000_000, "initial frame added a full interval of waiting");
         Assert.True(pacer.Schedule(deadline + 2_000, frequency, 100) == deadline + 10_000, "work time was added to each frame interval");
-        Assert.True(pacer.Schedule(2_000_000, frequency, 100) == 2_010_000, "a hitch created a catch-up burst");
+        Assert.True(pacer.Schedule(2_000_000, frequency, 100) == 2_000_000, "a hitch added an unnecessary wait");
+        Assert.True(pacer.Schedule(2_002_000, frequency, 100) == 2_010_000, "a hitch created a catch-up burst");
         Assert.True(pacer.Schedule(3_000_000, frequency, 0) == 3_000_000, "unlimited pacing delayed the frame");
-        Assert.True(pacer.Schedule(4_000_000, frequency, 50) == 4_020_000, "changed limit retained the previous deadline");
+        Assert.True(pacer.Schedule(4_000_000, frequency, 50) == 4_000_000, "changed limit added a stale wait");
+        Assert.True(pacer.Schedule(4_005_000, frequency, 50) == 4_020_000, "changed limit did not establish a new cadence");
+
+        foreach (var limit in new[] { 30, 60, 120 })
+        {
+            var interval = (frequency + limit - 1) / limit;
+            foreach (var work in new[] { interval / 2, interval, interval + 1, interval * 2 })
+            {
+                var slowPacer = new FramePacer();
+                var now = frequency;
+                Assert.True(slowPacer.Schedule(now, frequency, limit) == now, "initial cap waited");
+                for (var frame = 0; frame < 200; frame++)
+                {
+                    var finished = now + work;
+                    var expected = now + Math.Max(interval, work);
+                    now = slowPacer.Schedule(finished, frequency, limit);
+                    Assert.True(now == expected, $"cap {limit}, work {work}: unexpected deadline {now}, expected {expected}");
+                }
+            }
+        }
+
+        // Small sleep overshoots do not accumulate drift on otherwise fast frames.
+        var jitter = new FramePacer();
+        Assert.True(jitter.Schedule(frequency, frequency, 100) == frequency, "initial jitter deadline");
+        Assert.True(jitter.Schedule(frequency + 4_000, frequency, 100) == frequency + 10_000, "fast frame missed its deadline");
+        Assert.True(jitter.Schedule(frequency + 15_000, frequency, 100) == frequency + 20_000, "sleep overshoot accumulated drift");
         var settings = new ClientSettings { MaxFps = 60, BackgroundMaxFps = 120 };
         Assert.True(settings.FrameLimit(false) == 60 && settings.FrameLimit(true) == 60, "background increased the foreground ceiling");
         settings = settings with { MaxFps = 0, BackgroundMaxFps = 30 };
