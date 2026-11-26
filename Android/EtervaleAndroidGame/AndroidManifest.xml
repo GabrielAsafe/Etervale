@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:versionCode="46" android:versionName="1.0-v33-step14t2-auto-login">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:versionCode="52" android:versionName="1.0-suite-52-native-no-validation">
   <application android:allowBackup="true" android:icon="@mipmap/appicon" android:label="@string/app_name" android:roundIcon="@mipmap/appicon_round" android:supportsRtl="true">
   <activity android:name="org.libsdl.app.EtervaleSDLActivity" android:exported="false" android:screenOrientation="unspecified" android:configChanges="orientation|keyboard|keyboardHidden|screenSize" android:theme="@android:style/Theme.NoTitleBar.Fullscreen" android:windowSoftInputMode="adjustNothing" /></application>
   <uses-permission android:name="android.permission.INTERNET" />

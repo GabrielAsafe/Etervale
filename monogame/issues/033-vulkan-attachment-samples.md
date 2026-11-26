@@ -1,0 +1,3 @@
+# Vulkan attachment sample counts
+
+Query optimal-tiling color and depth attachment image-format properties and intersect the masks before constructing a 2D multisampled render target. Select the greatest supported count not exceeding the request; zero is MonoGame's single-sample representation. The actual managed count and native allocation agree. The OPPO reports 1/4/8/16 rather than 2 for HDR and D32. A 2x request therefore falls back to single sample, not FXAA. Runtime ABI 8 requires rebuilding matching native libraries on every platform. This path covers 2D RenderTarget2D construction, not arbitrary external images or swapchain MSAA.

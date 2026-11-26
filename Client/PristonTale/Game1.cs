@@ -166,7 +166,7 @@ public class Game1 : Game
                 + $" | realisticSky={settings.RealisticSky} IBL={settings.ImageBasedLighting}"
                 + $" | AO={settings.AmbientOcclusion} contact={settings.ContactShadows} exposure={settings.AutoExposure}"
                 + $" | bloom={settings.Bloom} grading={settings.ColorGrading} SSR={settings.ScreenSpaceReflections}"
-                + $" | volumetric={settings.VolumetricLight}"
+                + $" | volumetric={settings.VolumetricLight} localLightLimit={settings.LocalLightLimit}"
                 + $" | finalizersQueued={GraphicsDevice.EtervaleNativeFinalizersQueued}"
                 + $" finalizersDrained={GraphicsDevice.EtervaleNativeFinalizersDrained}"
                 + $" finalizersRejected={GraphicsDevice.EtervaleNativeFinalizersRejected}");
@@ -212,6 +212,9 @@ public class Game1 : Game
         if (_shutdown is null)
         {
             _presentationController.CaptureWindowSize(GraphicsDevice.Viewport.Width, GraphicsDevice.Viewport.Height);
+#if DEBUG
+            PristonTale.Display.AndroidRegressionScenario.Tick(_presentation);
+#endif
             _presentationController.UpdateBoundary();
         }
 

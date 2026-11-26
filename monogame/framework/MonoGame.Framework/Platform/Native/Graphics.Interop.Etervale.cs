@@ -19,7 +19,7 @@ internal static unsafe partial class MGG
     /// The interface version of monogame/runtime this framework is written for (MGVK_ETERVALE_RUNTIME_VERSION in
     /// MGG_Vulkan.cpp). Both change together, with every change of an exported function.
     /// </summary>
-    internal const int EtervaleRuntimeVersion = 7;
+    internal const int EtervaleRuntimeVersion = 8;
 
     [DllImport(MGP.MonoGameNativeDLL, EntryPoint = "MGG_Etervale_RuntimeVersion", ExactSpelling = true)]
     private static extern int Etervale_RuntimeVersion();
@@ -51,6 +51,10 @@ internal static unsafe partial class MGG
     }
 
     #endregion
+
+    [DllImport(MGP.MonoGameNativeDLL, EntryPoint = "MGG_Etervale_RenderTargetSamples", ExactSpelling = true)]
+    public static extern int Etervale_RenderTargetSamples(MGG_GraphicsDevice* device, SurfaceFormat format, DepthFormat depthFormat,
+        int width, int height, int mipmaps, int slices, int requested);
 
     #region In-place uploads (Etervale fork, issue 013)
 

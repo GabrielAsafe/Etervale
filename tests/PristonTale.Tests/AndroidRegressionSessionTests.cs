@@ -17,6 +17,9 @@ internal static class AndroidRegressionSessionTests
             Assert.True(!AndroidRegressionSession.Configure(["account", "bad password", "Test"]), "invalid input accepted");
             Assert.True(AndroidRegressionSession.Configure(["test.account", "test-pass", "Test"]), "valid request rejected");
             Assert.True(AndroidRegressionSession.HasLogin, "login missing");
+            Assert.True(!AndroidRegressionSession.Configure(["test", "test", "Test", "invalid"]), "unknown scenario accepted");
+            Assert.True(AndroidRegressionSession.Configure(["test.account", "test-pass", "Test", "graphics"]), "graphics scenario rejected");
+            Assert.True(AndroidRegressionSession.Scenario == "graphics", "wrong scenario");
             Assert.True(AndroidRegressionSession.TakeLogin()?.Account == "test.account", "wrong login");
             Assert.True(AndroidRegressionSession.TakeLogin() is null, "login reused");
             Assert.True(AndroidRegressionSession.TakeCharacter() == "Test", "wrong character");

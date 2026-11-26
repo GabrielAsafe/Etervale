@@ -10,6 +10,10 @@ public static class AndroidRegressionSession
     private static (string Account, string Password)? _login;
     private static string? _character;
     public static bool Active { get; private set; }
+    public static string Scenario { get; private set; } = "rotation";
+    public static bool GameplayReady { get; private set; }
+    public static void SetGameplayReady() => GameplayReady = Active;
+
     internal static bool HasLogin => _login.HasValue;
 
     public static void LoadOnce(string privateFilesDirectory)
@@ -49,14 +53,24 @@ public static class AndroidRegressionSession
     internal static bool Configure(string[] lines)
     {
         Active = false;
+        Scenario = "rotation";
+        GameplayReady = false;
         _login = null;
         _character = null;
-        if (lines.Length != 3 || !ValidCredential(lines[0]) || !ValidCredential(lines[1])
+        if (lines.Length is not (3 or 4) || !ValidCredential(lines[0]) || !ValidCredential(lines[1])
             || string.IsNullOrWhiteSpace(lines[2]) || lines[2].Length > 128)
         {
             return false;
         }
 
+        if (lines.Length == 4)
+        {
+            if (lines[3] is not ("rotation" or "graphics" or "pacing" or "performance"))
+            {
+                return false;
+            }
+            Scenario = lines[3];
+        }
         _login = (lines[0], lines[1]);
         _character = lines[2];
         Active = true;

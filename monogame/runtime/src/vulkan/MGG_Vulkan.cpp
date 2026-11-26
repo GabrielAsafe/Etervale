@@ -58,8 +58,10 @@
 #endif
 
 
-#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
+#if defined(__ANDROID__)
 #include <android/log.h>
+#endif
+#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
 
 static thread_local const char* MGVK_TransferDiagnosticPath = nullptr;
 
@@ -1718,7 +1720,7 @@ static void MGVK_RequireTransferSuccess(VkResult result, const char* operation)
 {
     if (result == VK_SUCCESS)
         return;
-#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
+#if defined(__ANDROID__)
     __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "transfer failure: %s VkResult=%d", operation, (int)result);
 #endif
     fprintf(stderr, "Vulkan transfer failure: %s VkResult=%d\n", operation, (int)result);
@@ -1738,7 +1740,7 @@ static void MGVK_WaitForCompletedFence(MGG_GraphicsDevice* device, VkFence fence
         const VkResult result = vkWaitForFences(device->device, 1, &fence, VK_TRUE, 1000000000ULL);
         if (result == VK_SUCCESS)
         {
-#if defined(ETERVALE_VK_VALIDATION)
+#if defined(__ANDROID__)
             if (timeouts != 0)
                 __android_log_print(ANDROID_LOG_INFO, "ETERVALE_VK_VALIDATION",
                     "fence recovered: %s retries=%u", operation, timeouts);
@@ -1751,7 +1753,7 @@ static void MGVK_WaitForCompletedFence(MGG_GraphicsDevice* device, VkFence fence
             return;
         }
         ++timeouts;
-#if defined(ETERVALE_VK_VALIDATION)
+#if defined(__ANDROID__)
         if (timeouts == 1)
             __android_log_print(ANDROID_LOG_WARN, "ETERVALE_VK_VALIDATION",
                 "fence timeout: %s; retrying same fence", operation);
@@ -3532,12 +3534,6 @@ void MGG_GraphicsDevice_Present(MGG_GraphicsDevice* device, mgint currentFrame, 
 		presentInfo.pSwapchains = &device->swapchain;
 		presentInfo.pImageIndices = &frame.image_index;
 		res = vkQueuePresentKHR(device->queue, &presentInfo);
-#if defined(__ANDROID__) && !defined(ETERVALE_VK_VALIDATION)
-		// ETERVALE_ANDROID_RENDER_FENCE_PRESENT: serialize graphics, not the presentation queue.
-		// The submit fence covers rendering, but not consumption of the present semaphore.
-		// Present semaphores remain owned by swapchain images; reuse follows image acquisition.
-		MGVK_WaitForCompletedFence(device, frame.completedFence, "post-present baseline fence");
-#endif
 	}
 
 	// Cleanup any finished transfers as they may be
@@ -6489,6 +6485,31 @@ static MGG_Texture* MGVK_Texture_Create(
 	return texture;
 }
 
+MG_EXPORT mgint MGG_Etervale_RenderTargetSamples(MGG_GraphicsDevice* device, MGSurfaceFormat format,
+    MGDepthFormat depthFormat, mgint width, mgint height, mgint mipmaps, mgint slices, mgint requested)
+{
+    if (requested <= 1) return 0;
+    VkImageFormatProperties color = {};
+    if (vkGetPhysicalDeviceImageFormatProperties(device->physicalDevice, ToVkFormat(format), VK_IMAGE_TYPE_2D,
+        VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, 0, &color) != VK_SUCCESS)
+        return 0;
+    if (width > (mgint)color.maxExtent.width || height > (mgint)color.maxExtent.height ||
+        mipmaps != 1 || slices > (mgint)color.maxArrayLayers) return 0;
+    VkSampleCountFlags counts = color.sampleCounts;
+    if (depthFormat != MGDepthFormat::None)
+    {
+        VkImageFormatProperties depth = {};
+        if (vkGetPhysicalDeviceImageFormatProperties(device->physicalDevice, ToVkFormat(depthFormat), VK_IMAGE_TYPE_2D,
+            VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 0, &depth) != VK_SUCCESS)
+            return 0;
+        if (width > (mgint)depth.maxExtent.width || height > (mgint)depth.maxExtent.height) return 0;
+        counts &= depth.sampleCounts;
+    }
+    for (mgint samples : {64, 32, 16, 8, 4, 2})
+        if (samples <= requested && (counts & ToVkSampleCount(samples))) return samples;
+    return 0;
+}
+
 MGG_Texture* MGG_RenderTarget_Create(
 	MGG_GraphicsDevice* device,
 	MGTextureType type,
@@ -7717,7 +7738,7 @@ MG_EXPORT void MGG_GraphicsDevice_GetNativeHandles(const MGG_GraphicsDevice* dev
 // MGG.EnsureRuntimeVersion) checks before anything else: a library built from other sources (the official package, or
 // a stale build of the fork) would fail later at the first missing export, or worse, call an export whose arguments
 // changed. Bumped with every change of an exported function (monogame/issues/002-runtime-version.md).
-#define MGVK_ETERVALE_RUNTIME_VERSION 7
+#define MGVK_ETERVALE_RUNTIME_VERSION 8
 
 MG_EXPORT mgint MGG_Etervale_RuntimeVersion()
 {

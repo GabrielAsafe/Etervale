@@ -36,6 +36,7 @@ public sealed class GameplayScreen : GameScreen
         LogGpuPerf(p);
         var sceneSize = renderer.SceneRenderSize;
         return $" | scene3D={sceneSize.X}x{sceneSize.Y}"
+            + $" | sceneMsaa={renderer.EffectiveMultiSampleCount}"
             + $" | depthPrepass={(renderer.SceneLinearDepth is null ? "off" : "on")}"
             + $" | CPU draw: scene {_perfSceneMs:F1} HUD {_perfHudMs:F1} portrait {_perfPortraitMs:F1} ms"
             + $" | CPU passes: prepass {p.CpuLast(RenderSection.Prepass):F1} opaque {p.CpuLast(RenderSection.Opaque):F1} masked {p.CpuLast(RenderSection.Masked):F1}"
@@ -283,6 +284,9 @@ public sealed class GameplayScreen : GameScreen
         {
             _mobileFirstGameplayDraw = true;
             MobileDiagnosticTrace.Mark("gameplay_first_draw");
+#if DEBUG
+            PristonTale.Gameplay.Screens.Framework.AndroidRegressionSession.SetGameplayReady();
+#endif
         }
     }
 

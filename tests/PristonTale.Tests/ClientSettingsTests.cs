@@ -336,11 +336,12 @@ internal static class ClientSettingsTests
         var pacer = new FramePacer();
         const long frequency = 1_000_000;
         var deadline = pacer.Schedule(frequency, frequency, 100);
-        Assert.True(deadline == 1_010_000, "initial frame deadline is wrong");
+        Assert.True(deadline == frequency, "first boundary added an arbitrary delay");
         Assert.True(pacer.Schedule(deadline + 2_000, frequency, 100) == deadline + 10_000, "work time was added to each frame interval");
-        Assert.True(pacer.Schedule(2_000_000, frequency, 100) == 2_010_000, "a hitch created a catch-up burst");
+        Assert.True(pacer.Schedule(2_000_000, frequency, 100) == 2_000_000, "a hitch added an extra wait");
+        Assert.True(pacer.Schedule(2_002_000, frequency, 100) == 2_010_000, "pacer did not rebase after a hitch");
         Assert.True(pacer.Schedule(3_000_000, frequency, 0) == 3_000_000, "unlimited pacing delayed the frame");
-        Assert.True(pacer.Schedule(4_000_000, frequency, 50) == 4_020_000, "changed limit retained the previous deadline");
+        Assert.True(pacer.Schedule(4_000_000, frequency, 50) == 4_000_000, "changed limit retained the previous deadline");
         var settings = new ClientSettings { MaxFps = 60, BackgroundMaxFps = 120 };
         Assert.True(settings.FrameLimit(false) == 60 && settings.FrameLimit(true) == 60, "background increased the foreground ceiling");
         settings = settings with { MaxFps = 0, BackgroundMaxFps = 30 };

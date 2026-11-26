@@ -24,3 +24,7 @@ measurement or distribution. Verify the APK version, both native libraries and t
 Disable the CMake option and omit the MSBuild property for ordinary builds. Restore the manifest version after the test.
 
 See [transfer completion checks](030-vulkan-transfer-completion.md) for the 14E.2 follow-up.
+
+The async presentation candidate also runs with validation disabled. Frame-slot fence waits, retry handling and resource retirement remain in place. Compare with the validation build before accepting this change.
+
+The native-resolution regression candidate is packaged without Khronos after the equivalent validation build passes. This is still a Debug test APK, not a production Release build.

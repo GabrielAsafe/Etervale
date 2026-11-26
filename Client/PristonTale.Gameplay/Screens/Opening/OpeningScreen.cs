@@ -32,6 +32,15 @@ public sealed class OpeningScreen : GameScreen
 
     public override void Enter()
     {
+        if (OperatingSystem.IsAndroid())
+        {
+            _audio = LoginAudio.Opening(Context.Audio);
+            _loginController = new OpeningLoginController(Context, _audio);
+            _loginRevealed = true;
+            _status = "Android login";
+            return;
+        }
+
         // Handheld-only: establish a usable login before allocating any 3D renderer.
         if (System.Environment.GetEnvironmentVariable("ETERVALE_H700_DIRECT_LOGIN") == "1")
         {

@@ -9,6 +9,13 @@ public partial class RenderTarget2D
 {
     private unsafe void PlatformConstruct(GraphicsDevice graphicsDevice, int width, int height, bool mipMap, DepthFormat preferredDepthFormat, int preferredMultiSampleCount, RenderTargetUsage usage, bool shared)
     {
+        // Vulkan attachment sample masks can have holes, including no 2x support.
+        if (preferredMultiSampleCount > 0)
+        {
+            preferredMultiSampleCount = MGG.Etervale_RenderTargetSamples(GraphicsDevice.Handle, _format, preferredDepthFormat,
+                width, height, _levelCount, ArraySize, preferredMultiSampleCount);
+            MultiSampleCount = preferredMultiSampleCount;
+        }
         Handle = MGG.RenderTarget_Create(
             GraphicsDevice.Handle,
             TextureType._2D,

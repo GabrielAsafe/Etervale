@@ -1051,3 +1051,7 @@ budget; never read files in `Update`/`Draw` after `BeginRemotePresence`. Resolve
   Ground navigation ignores floors not reachable from the current surface.
 - The optional streaming trace reports portal/seam distances when unloading a neighbouring field. It changes no
   loading distances, movement physics or authoritative warp behaviour.
+
+Debug Android regression requests optionally contain a fourth line selecting rotation, graphics, pacing or performance. The presentation boundary runs fixed-duration cases with normal settings application and confirmation. The host validates observed metrics and restores the original settings after each run. No credentials are stored in the APK.
+
+Android starts directly at the 2D login screen, without loading the opening cinematic. Desktop retains the cinematic. The Android startup milestone remains login_first_draw.

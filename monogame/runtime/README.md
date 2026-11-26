@@ -232,3 +232,5 @@ See [Android packaged Vulkan validation diagnostics](../issues/027-android-packa
 Swapchain creation selects a supported composite alpha mode. See [surface alpha selection](../issues/028-swapchain-composite-alpha.md).
 
 Vulkan 1.0 extended feature queries use the enabled KHR entry point. See [feature queries](../issues/029-vulkan-1-0-feature-query.md).
+
+See [attachment sample counts](../issues/033-vulkan-attachment-samples.md). Runtime interface version 8 requires a matching native library.

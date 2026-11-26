@@ -71,3 +71,5 @@ Every change is marked `Etervale fork` in the source and has a document in `../i
 
 - Android serial presentation defers graphics-resource finalizers to the graphics-device boundary; see
   [issue 020](../issues/020-android-native-finalizers.md). Desktop finalization is unchanged.
+
+The Vulkan runtime interface version is 8; rebuild the matching native library. See [attachment sample counts](../issues/033-vulkan-attachment-samples.md).

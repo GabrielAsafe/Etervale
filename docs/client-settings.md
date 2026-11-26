@@ -238,14 +238,15 @@ or resumes the day cycle. These change the live renderer only; the file keeps it
 
 ## Android scene resolution diagnostic
 
-The Android in-world renderer requests a 50% linear scene scale for the full back buffer. Its HDR colour, depth,
-normal and sky targets use the reduced dimensions; the post chain composes into the original native viewport.
+The Android in-world renderer requests 100% linear scene scale for the full back buffer. Its HDR colour, depth,
+normal and sky targets use native dimensions; the post chain composes into the original native viewport.
 The UI, combat text, ground labels, touch coordinates, off-screen previews, opening and desktop rendering retain
 native geometry. The final display transform still runs at native output resolution. The F9 performance log reports
-`scene3D` dimensions independently of the display viewport. This fixed scale is a diagnostic experiment, not a user
-setting or a measured performance guarantee.
+`scene3D` dimensions independently of the display viewport. The former 50% scale is no longer selected by gameplay.
 
 Android gameplay skips the optional depth pre-pass when temporal AA, ambient occlusion, contact shadows,
 screen-space reflections and volumetric light are all off. The main opaque pass still writes its normal depth buffer.
 Tile lighting can use the full view depth range; soft particles lose their optional linear-depth fade in this mode.
 Other renderer callers retain their original pre-pass policy. The performance log reports `depthPrepass=on/off`.
+
+Frame pacing schedules the next boundary from the previous boundary. A frame that has already exceeded its period does not incur another full sleep. The first boundary after a limit change establishes the new clock without an arbitrary delay.
