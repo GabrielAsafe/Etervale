@@ -219,3 +219,7 @@ See [surface alpha and empty descriptor binds](../issues/033-desktop-surface-alp
 ## Vulkan 1.0 custom border colours
 
 See [custom border feature detection](../issues/034-vulkan-1-0-custom-border-features.md).
+
+## HDR render target multisample support
+
+See [render target MSAA capabilities](../issues/035-render-target-msaa-capabilities.md).

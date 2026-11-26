@@ -239,6 +239,7 @@ internal sealed class PristonSceneTargets : IDisposable
         _normals = null;
         // PreserveContents: MonoGame clears a DiscardContents target whenever it is bound, which would open a render
         // pass (and waste a clear) on every rebind inside the frame; the scene is filled explicitly instead.
+        var supportedSamples = _device.GetSupportedRenderTarget2DMultiSampleCount(SurfaceFormat.HalfVector4, PristonDepth.Format, multiSampleCount);
         _color = new RenderTarget2D(
             _device,
             width,
@@ -246,7 +247,7 @@ internal sealed class PristonSceneTargets : IDisposable
             false,
             SurfaceFormat.HalfVector4,
             PristonDepth.Format,
-            multiSampleCount,
+            supportedSamples,
             RenderTargetUsage.PreserveContents);
         _requestedSamples = multiSampleCount;
         if (temporal)

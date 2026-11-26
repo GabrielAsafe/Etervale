@@ -119,6 +119,20 @@ public partial class GraphicsDevice
         DefaultTexture.SetData(new[] { Color.Black, Color.Black, Color.Black, Color.Black });
     }
 
+    // Etervale fork: the formats of the actual colour and depth images can support fewer sample counts than the device.
+    /// <summary>
+    /// Returns a supported multisample count for the requested color
+    /// and depth formats, or zero for single-sample rendering.
+    /// </summary>
+    public unsafe int GetSupportedRenderTarget2DMultiSampleCount(SurfaceFormat format, DepthFormat depthFormat, int requested)
+    {
+        int normalized = GetClampedMultisampleCount(format, requested);
+        if (normalized <= 1)
+            return 0;
+
+        return MGG.GraphicsDevice_GetRenderTarget2DMultiSampleCount(Handle, format, depthFormat, normalized);
+    }
+
     internal int PlatformGetMaxMultiSampleCount(SurfaceFormat format)
     {
         return MaxMultiSampleCount;

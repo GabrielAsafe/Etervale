@@ -440,7 +440,8 @@ they took the domes.
   thirds of fine texture contrast; depth tolerance 0.06; motion of skinned actors from the previous bone
   palette (`PristonSkinPalette` keeps the previous pose, stamped per motion frame), of wind and water from the previous
   animation time. Volumetric and AO noise rotate per frame only with TAA.
-- **MSAA:** scene target multisampled (2-4), the back buffer never.
+- **MSAA:** scene target requests 2-4 samples, negotiated against HDR colour and depth support; zero means single-sampled.
+  The back buffer is never multisampled.
 - **FXAA / SMAA 1x:** on the 8-bit display image after the final pass.
 
 ## Diagnostics

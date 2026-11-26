@@ -1996,6 +1996,40 @@ mgint MGG_GraphicsDevice_GetBackBufferMultiSampleCount(MGG_GraphicsDevice* devic
 	return device->multiSampleCount;
 }
 
+// Query the images actually used for a single-level, single-layer 2D colour target and its depth attachment.
+MG_EXPORT mgint MGG_GraphicsDevice_GetRenderTarget2DMultiSampleCount(MGG_GraphicsDevice* device,
+	MGSurfaceFormat color, MGDepthFormat depth, mgint requested)
+{
+	assert(device != nullptr);
+	if (requested <= 1 || color == MGSurfaceFormat::Depth32Float)
+		return 0;
+
+	VkImageFormatProperties colorProperties = {};
+	if (vkGetPhysicalDeviceImageFormatProperties(device->physicalDevice, ToVkFormat(color), VK_IMAGE_TYPE_2D,
+		VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, 0, &colorProperties) != VK_SUCCESS)
+		return 0;
+
+	VkSampleCountFlags counts = colorProperties.sampleCounts & device->deviceProperties.limits.framebufferColorSampleCounts;
+	if (depth != MGDepthFormat::None)
+	{
+		VkImageFormatProperties depthProperties = {};
+		if (vkGetPhysicalDeviceImageFormatProperties(device->physicalDevice, ToVkFormat(depth), VK_IMAGE_TYPE_2D,
+			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 0, &depthProperties) != VK_SUCCESS)
+			return 0;
+		counts &= depthProperties.sampleCounts & device->deviceProperties.limits.framebufferDepthSampleCounts;
+		if (depth == MGDepthFormat::Depth24 || depth == MGDepthFormat::Depth24Stencil8)
+			counts &= device->deviceProperties.limits.framebufferStencilSampleCounts;
+	}
+
+	// Vulkan sample-count bits equal their sample count. Never raise the requested quality.
+	for (mgint samples = 64; samples >= 2; samples /= 2)
+	{
+		if (samples <= requested && (counts & static_cast<VkSampleCountFlags>(samples)) != 0)
+			return samples;
+	}
+	return 0;
+}
+
 void MGVK_RecreateSwapChain(
 	MGG_GraphicsDevice* device,
 	void* nativeWindowHandle,
@@ -7184,7 +7218,7 @@ MG_EXPORT void MGG_GraphicsDevice_GetNativeHandles(const MGG_GraphicsDevice* dev
 // MGG.EnsureRuntimeVersion) checks before anything else: a library built from other sources (the official package, or
 // a stale build of the fork) would fail later at the first missing export, or worse, call an export whose arguments
 // changed. Bumped with every change of an exported function (monogame/issues/002-runtime-version.md).
-#define MGVK_ETERVALE_RUNTIME_VERSION 7
+#define MGVK_ETERVALE_RUNTIME_VERSION 8
 
 MG_EXPORT mgint MGG_Etervale_RuntimeVersion()
 {
