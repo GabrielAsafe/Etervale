@@ -235,3 +235,7 @@ See [swapchain resource lifetime](../issues/037-swapchain-resource-lifetime.md).
 ## Sampler resource lifetime
 
 See [sampler resource lifetime](../issues/038-sampler-resource-lifetime.md).
+
+## Texture resource lifetime
+
+See [texture resource lifetime](../issues/039-texture-resource-lifetime.md).

@@ -34,6 +34,8 @@ namespace StateCacheRepro
         private SpriteBatch? _samplerBatch;
         private Texture2D? _samplerPixel;
         private bool _samplerDrawn;
+        private RenderTarget2D? _retirementOutput;
+        private bool _retirementDrawn;
         private int _frame;
 
         public int Failures { get; private set; }
@@ -50,6 +52,8 @@ namespace StateCacheRepro
             // PreserveContents: MonoGame clears a DiscardContents target whenever it is bound (the banded test rebinds it).
             _target = new RenderTarget2D(GraphicsDevice, Size, Size, false, SurfaceFormat.Color, DepthFormat.Depth24Stencil8, 0, RenderTargetUsage.PreserveContents);
             _other = new RenderTarget2D(GraphicsDevice, Size, Size, false, SurfaceFormat.Color, DepthFormat.None);
+            _retirementOutput = new RenderTarget2D(GraphicsDevice, Size, Size, false, SurfaceFormat.Color,
+                DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
             _samplerBatch = new SpriteBatch(GraphicsDevice);
             _samplerPixel = new Texture2D(GraphicsDevice, 1, 1);
             _samplerPixel.SetData(new[] { Color.White });
@@ -77,12 +81,14 @@ namespace StateCacheRepro
             {
                 StressStep();
                 SamplerRetirementStep();
+                TextureRetirementStep();
             }
             else
             {
                 // Last: the 80 000 user-primitive draws leave as many dynamic vertex buffers in the runtime's free list,
                 // which slows every later frame down.
                 CheckSamplerPixel();
+                CheckRetiredTexturePixel();
                 UniformOverflowTest();
                 Console.WriteLine($"{_frames} stress frames, {Failures} failed checks");
                 Exit();
@@ -252,6 +258,44 @@ namespace StateCacheRepro
             _samplerDrawn = false;
         }
 
+        // Record a draw into a depth-backed target, sample it in another pass, then retire it before Present.
+        // The next frame verifies the output of those recorded commands.
+        private void TextureRetirementStep()
+        {
+            CheckRetiredTexturePixel();
+            var device = GraphicsDevice;
+            using var target = new RenderTarget2D(device, Size, Size, false, SurfaceFormat.Color,
+                DepthFormat.Depth24Stencil8, 0, RenderTargetUsage.PreserveContents);
+            device.SetRenderTarget(target);
+            device.Clear(ClearOptions.Target | ClearOptions.DepthBuffer | ClearOptions.Stencil, Color.Black, 1f, 0);
+            _samplerBatch!.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp,
+                DepthStencilState.Default);
+            _samplerBatch.Draw(_samplerPixel!, new Rectangle(0, 0, Size, Size), Color.Red);
+            _samplerBatch.End();
+            device.SetRenderTarget(_retirementOutput);
+            device.Clear(Color.Black);
+            _samplerBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
+            _samplerBatch.Draw(target, new Rectangle(0, 0, Size, Size), Color.White);
+            _samplerBatch.End();
+            device.SetRenderTarget(null);
+            device.Textures[0] = null;
+            _retirementDrawn = true;
+        }
+
+        private void CheckRetiredTexturePixel()
+        {
+            if (!_retirementDrawn)
+                return;
+            var pixels = new Color[Size * Size];
+            _retirementOutput!.GetData(pixels);
+            if (pixels[Size + 1] != Color.Red)
+            {
+                Failures++;
+                Console.WriteLine($"texture retirement: expected {Color.Red}, got {pixels[Size + 1]}");
+            }
+            _retirementDrawn = false;
+        }
+
         private void StressStep()
         {
             var functions = new[] { BlendFunction.Add, BlendFunction.Subtract, BlendFunction.ReverseSubtract, BlendFunction.Min, BlendFunction.Max };
@@ -372,6 +416,7 @@ namespace StateCacheRepro
             {
                 _target?.Dispose();
                 _other?.Dispose();
+                _retirementOutput?.Dispose();
                 _samplerBatch?.Dispose();
                 _samplerPixel?.Dispose();
                 _effect?.Dispose();

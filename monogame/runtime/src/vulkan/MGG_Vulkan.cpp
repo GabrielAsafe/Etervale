@@ -486,6 +486,7 @@ struct MGG_GraphicsDevice
 
 struct MGG_Texture
 {
+	FrameCounter retiredFrame = 0;
 	FrameCounter writeFrame = -1;
 	FrameCounter frame = 0;
 	// Etervale fork: the frame whose command buffer holds an upload into this texture (MGG_Texture_SetData), -1 if none.
@@ -2767,20 +2768,25 @@ static void MGVK_DestroyTargetSets(MGG_GraphicsDevice* device, std::function<boo
 			itr++;
 		else
 		{
+			if (device->pipelineState.targets == itr->second)
+			{
+				device->pipelineState.targets = nullptr;
+				device->pipelineStateDirty = true;
+				device->renderTargetDirty = true;
+			}
+			vkDestroyFramebuffer(device->device, itr->second->framebuffer, nullptr);
             for (int i = 0; i < MGVK_NUM_TARGETS; ++i) {
                 auto& view = itr->second->arraySlicesViews[i];
                 if (view.has_value()) {
                     vkDestroyImageView(device->device, view.value(), nullptr);
                 }
             }
-			vkDestroyFramebuffer(device->device, itr->second->framebuffer, nullptr);
 			vkDestroyRenderPass(device->device, itr->second->renderPass, nullptr);
 			delete itr->second;
 			cache.erase(itr++);
 		}
 	}
 
-	device->pipelineState.targets = nullptr;
 }
 
 size_t MGVK_PipelineKeyHash::operator()(const MGVK_PipelineKey& key) const
@@ -2869,6 +2875,62 @@ static void MGVK_DestroyPipelines(MGG_GraphicsDevice* device, std::function<bool
 	}
 }
 
+// Etervale fork: depth attachments are owned by their colour target. Only call after its
+// framebuffers have been destroyed and its GPU work has completed.
+static void MGVK_DestroyOwnedDepthAttachment(MGG_GraphicsDevice* device, MGG_Texture* owner)
+{
+	auto depth = owner->depthTexture;
+	if (!depth)
+		return;
+	owner->depthTexture = nullptr;
+	if (depth->target_view != VK_NULL_HANDLE)
+		vkDestroyImageView(device->device, depth->target_view, nullptr);
+	if (depth->view != VK_NULL_HANDLE && depth->view != depth->target_view)
+		vkDestroyImageView(device->device, depth->view, nullptr);
+	if (depth->allocation != VK_NULL_HANDLE)
+		vmaDestroyImage(device->allocator, depth->image, depth->allocation);
+	delete depth;
+}
+
+// Clear future bindings without changing descriptor sets already recorded by earlier draws.
+static void MGVK_UnbindRetiredTexture(MGG_GraphicsDevice* device, MGG_Texture* texture)
+{
+	for (int stage = 0; stage < (int)MGShaderStage::Count; ++stage)
+	{
+		for (int slot = 0; slot < MAX_TEXTURE_SLOTS; ++slot)
+		{
+			if (device->textures[stage][slot] == texture)
+			{
+				device->textures[stage][slot] = nullptr;
+				device->textureSamplerDirty |= 1u << slot;
+			}
+		}
+		for (int slot = 0; slot < MGVK_MAX_UAV_SLOTS; ++slot)
+		{
+			if (device->uavs[stage][slot].texture == texture)
+			{
+				device->uavs[stage][slot] = {};
+				device->storageDirty[stage] |= 1u << (16 + slot);
+			}
+		}
+	}
+}
+
+static void MGVK_ClearRetiredTarget(MGG_GraphicsDevice* device, MGG_Texture* texture)
+{
+	for (int slot = 0; slot < MGVK_NUM_TARGETS; ++slot)
+	{
+		if (device->targets.targets[slot] == texture)
+		{
+			device->targets = MGVK_TargetSet{};
+			device->pipelineState.targets = nullptr;
+			device->pipelineStateDirty = true;
+			device->renderTargetDirty = true;
+			break;
+		}
+	}
+}
+
 static void MGVK_DestroyFrameResources(MGG_GraphicsDevice* device, FrameCounter currentFrame, mgbyte free_all)
 {
 	assert(device != nullptr);
@@ -2890,11 +2952,14 @@ static void MGVK_DestroyFrameResources(MGG_GraphicsDevice* device, FrameCounter 
 		while (!device->destroyTextures.empty())
 		{
 			auto texture = device->destroyTextures.front();
-			auto diff = currentFrame - texture->frame;
-			if (!free_all && diff < device->freeFrames)
+			// Retirement itself and any later recorded use must both be old enough.
+			if (!free_all && (currentFrame - texture->retiredFrame < device->freeFrames ||
+				currentFrame - texture->frame < device->freeFrames))
 				break;
 
 			device->destroyTextures.pop();
+			MGVK_UnbindRetiredTexture(device, texture);
+			MGVK_ClearRetiredTarget(device, texture);
 
 			{
 				std::lock_guard lock(device->transferMutex);
@@ -2947,6 +3012,7 @@ static void MGVK_DestroyFrameResources(MGG_GraphicsDevice* device, FrameCounter 
 			{
 				vmaDestroyImage(device->allocator, texture->image, texture->allocation);
 			}
+			MGVK_DestroyOwnedDepthAttachment(device, texture);
 			mg_remove(device->all_textures, texture);
 			delete texture;
 		}
@@ -3637,8 +3703,9 @@ static void MGVK_UpdateRenderPass(MGG_GraphicsDevice* device, FrameCounter curre
 		// banded shadow maps are drawn over across frames). Only a target never written starts undefined.
 		device->targets.firstUse[i] = target->writeFrame == (FrameCounter)-1;
 
-		// Mark the targets as being written to this frame.
+		// Mark the targets as being written to this frame (also a lifetime use).
 		target->writeFrame = currentFrame;
+		target->frame = currentFrame;
 	}
 
 	// Lookup the texture set in the cache.
@@ -6247,20 +6314,28 @@ void MGG_Texture_Destroy(MGG_GraphicsDevice* device, MGG_Texture* texture)
 	if (!texture)
 		return;
 
-	if (texture->depthTexture)
-		MGG_Texture_Destroy(device, texture->depthTexture);
+	// Do not enqueue the private depth attachment independently of its framebuffer owner.
+	MGVK_UnbindRetiredTexture(device, texture);
 
 	// If this is an externally owned texture (like an external swapchain or image wrapped in a RenderTarget2D).
 	if (texture->isExternal && texture->allocation == VK_NULL_HANDLE)
 	{
 		// Wait for the device to be idle to safely destroy views before the external caller destroys the underlying VkImage.
-		vkDeviceWaitIdle(device->device);
+		const auto idle = vkDeviceWaitIdle(device->device);
+		if (idle != VK_SUCCESS)
+		{
+			fprintf(stderr, "External texture idle wait failed: %d\n", (int)idle);
+			std::abort();
+		}
+		MGVK_ClearRetiredTarget(device, texture);
 
 		if (texture->isTarget)
 		{
 			MGVK_DestroyPipelines(device, [texture](const MGVK_PipelineState& s)
 				{
-					for (int i = 0; i < s.targets->set.numTargets; i++)
+					if (!s.targets)
+					return false;
+				for (int i = 0; i < s.targets->set.numTargets; i++)
 					{
 						if (s.targets->set.targets[i] == texture)
 						{
@@ -6297,11 +6372,13 @@ void MGG_Texture_Destroy(MGG_GraphicsDevice* device, MGG_Texture* texture)
 			vkDestroyImageView(device->device, texture->view, nullptr);
 		}
 
+		MGVK_DestroyOwnedDepthAttachment(device, texture);
 		delete texture;
 		return;
 	}
 
-	// Queue the texture for later destruction.
+	// Queue the texture and its private attachment as one lifetime unit.
+	texture->retiredFrame = device->frame;
 	device->destroyTextures.push(texture);
 }
 
