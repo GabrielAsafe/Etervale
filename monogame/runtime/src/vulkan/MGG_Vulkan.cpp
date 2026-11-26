@@ -461,6 +461,7 @@ struct MGG_GraphicsDevice
 	std::queue<MGG_RasterizerState*> destroyRasterizerStates;
 	std::queue<MGG_DepthStencilState*> destroyDepthStencilStates;
 	std::queue<MGG_SamplerState*> destroySamplers;
+	std::queue<MGG_Shader*> destroyShaders;
 
 	MGG_Buffer* discarded = nullptr;
 	MGG_Buffer* pending = nullptr;
@@ -559,6 +560,7 @@ struct MGVK_InputLocation
 
 struct MGG_Shader
 {
+	FrameCounter retiredFrame = 0;
 	uint32_t id;
 
 	MGShaderStage stage;
@@ -666,6 +668,7 @@ static void MGVK_BufferCopyAndFlush(MGG_GraphicsDevice* device, MGG_Buffer* buff
 static MGG_Buffer* MGVK_Buffer_Create(MGG_GraphicsDevice* device, MGBufferType type, mgint sizeInBytes, bool no_push);
 static void MGVK_DestroyPipelines(MGG_GraphicsDevice* device, std::function<bool(const MGVK_PipelineState&)> compare);
 static void MGVK_DestroyFrameResources(MGG_GraphicsDevice* device, FrameCounter currentFrame, mgbyte free_all);
+static void MGVK_DestroyRetiredShaders(MGG_GraphicsDevice* device, FrameCounter currentFrame, bool freeAll);
 static void MGVK_UpdateRenderPass(MGG_GraphicsDevice* device, FrameCounter currentFrame, VkCommandBuffer commandBuffer);
 static VkCommandBuffer MGVK_BeginNewCommandBuffer(MGG_GraphicsDevice* device, VkCommandPool pool = VK_NULL_HANDLE);
 static void MGVK_ExecuteAndFreeCommandBuffer(MGG_GraphicsDevice* device, VkCommandBuffer commandBuffer, VkCommandPool pool = VK_NULL_HANDLE);
@@ -1915,6 +1918,12 @@ void MGG_GraphicsDevice_Destroy(MGG_GraphicsDevice* device)
 
 	MGVK_CleanupSwapChain(device);
 
+	while (!device->all_shaders.empty())
+		MGG_Shader_Destroy(device, device->all_shaders.back());
+	MGVK_DestroyRetiredShaders(device, device->frame, true);
+	MGVK_DestroyPipelines(device, [](const MGVK_PipelineState&) { return true; });
+	device->pipelineState.program = nullptr;
+
 	for (auto pair : device->shader_programs)
 	{
 		vkDestroyPipelineLayout(device->device, pair.second->layout, nullptr);
@@ -2869,6 +2878,8 @@ static void MGVK_DestroyPipelines(MGG_GraphicsDevice* device, std::function<bool
 			itr++;
 		else
 		{
+			if (device->lastGraphicsPipeline == itr->second.cache)
+				device->lastGraphicsPipeline = VK_NULL_HANDLE;
 			vkDestroyPipeline(device->device, itr->second.cache, nullptr);
 			pipelines.erase(itr++);
 		}
@@ -2934,6 +2945,9 @@ static void MGVK_ClearRetiredTarget(MGG_GraphicsDevice* device, MGG_Texture* tex
 static void MGVK_DestroyFrameResources(MGG_GraphicsDevice* device, FrameCounter currentFrame, mgbyte free_all)
 {
 	assert(device != nullptr);
+
+	// Shader-owned descriptor pools and pipelines follow the same frame retirement budget.
+	MGVK_DestroyRetiredShaders(device, currentFrame, free_all != 0);
 
 	// Delete resources that haven't been used in a few frames
 	{
@@ -7027,23 +7041,39 @@ MGG_Shader* MGG_Shader_Create(MGG_GraphicsDevice* device, MGShaderStage stage, m
 	return shader;
 }
 
-void MGG_Shader_Destroy(MGG_GraphicsDevice* device, MGG_Shader* shader)
+// Etervale fork: called only after the retirement frame has completed, or after an idle drain.
+static void MGVK_DestroyRetiredShader(MGG_GraphicsDevice* device, MGG_Shader* shader)
 {
-	assert(device != nullptr);
-	assert(shader != nullptr);
+	// Programs own the graphics pipeline layouts and are referenced by the pipeline cache.
+	for (auto it = device->shader_programs.begin(); it != device->shader_programs.end();)
+	{
+		auto program = it->second;
+		if (program->vertex != shader && program->pixel != shader)
+		{
+			++it;
+			continue;
+		}
+		MGVK_DestroyPipelines(device, [program](const MGVK_PipelineState& state)
+		{
+			return state.program == program;
+		});
+		if (device->pipelineState.program == program)
+		{
+			device->pipelineState.program = nullptr;
+			device->pipelineStateDirty = true;
+			device->shaderDirty = true;
+		}
+		vkDestroyPipelineLayout(device->device, program->layout, nullptr);
+		delete program;
+		it = device->shader_programs.erase(it);
+	}
 
-	if (!shader)
-		return;
-
-	// Etervale fork: a compute shader's pipeline may still run in a frame in flight; effects are disposed rarely, so the
-	// device is waited once rather than the pipeline queued for later destruction.
 	if (shader->computePipeline != VK_NULL_HANDLE)
 	{
-		vkDeviceWaitIdle(device->device);
+		if (device->lastComputePipeline == shader->computePipeline)
+			device->lastComputePipeline = VK_NULL_HANDLE;
 		vkDestroyPipeline(device->device, shader->computePipeline, nullptr);
 		vkDestroyPipelineLayout(device->device, shader->computeLayout, nullptr);
-		if (device->shaders[(mgint)MGShaderStage::Compute] == shader)
-			device->shaders[(mgint)MGShaderStage::Compute] = nullptr;
 	}
 
 	delete [] shader->bufferInfo;
@@ -7065,9 +7095,9 @@ void MGG_Shader_Destroy(MGG_GraphicsDevice* device, MGG_Shader* shader)
 		delete free;
 	}
 
+	if (shader->pool != VK_NULL_HANDLE)
+		vkDestroyDescriptorPool(device->device, shader->pool, nullptr);
 	vkDestroyDescriptorSetLayout(device->device, shader->setLayout, nullptr);
-
-	vkDestroyDescriptorPool(device->device, shader->pool, nullptr);
 	if (shader->poolInfo)
 	{
 		delete [] shader->poolInfo->pPoolSizes;
@@ -7076,8 +7106,47 @@ void MGG_Shader_Destroy(MGG_GraphicsDevice* device, MGG_Shader* shader)
 
 	vkDestroyShaderModule(device->device, shader->module, nullptr);
 
-	mg_remove(device->all_shaders, shader);
 	delete shader;
+}
+
+static void MGVK_DestroyRetiredShaders(MGG_GraphicsDevice* device, FrameCounter currentFrame, bool freeAll)
+{
+	while (!device->destroyShaders.empty())
+	{
+		auto shader = device->destroyShaders.front();
+		if (!freeAll && currentFrame - shader->retiredFrame < device->freeFrames)
+			break;
+		device->destroyShaders.pop();
+		MGVK_DestroyRetiredShader(device, shader);
+	}
+}
+
+void MGG_Shader_Destroy(MGG_GraphicsDevice* device, MGG_Shader* shader)
+{
+	assert(device != nullptr);
+	assert(shader != nullptr);
+	if (!shader)
+		return;
+
+	// Ignore subsequent descriptor recycling for this shader. Its sets remain alive until the GPU completes.
+	mg_remove(device->all_shaders, shader);
+	const int stage = (int)shader->stage;
+	if (device->shaders[stage] == shader)
+	{
+		device->shaders[stage] = nullptr;
+		if (shader->stage != MGShaderStage::Compute)
+			device->shaderDirty = true;
+	}
+	auto program = device->pipelineState.program;
+	if (program && (program->vertex == shader || program->pixel == shader))
+	{
+		device->pipelineState.program = nullptr;
+		device->pipelineStateDirty = true;
+		device->shaderDirty = true;
+	}
+	// Previously recorded commands retain their pipeline and descriptor handles; do not mutate them.
+	shader->retiredFrame = device->frame;
+	device->destroyShaders.push(shader);
 }
 
 MGG_OcclusionQuery* MGG_OcclusionQuery_Create(MGG_GraphicsDevice* device)

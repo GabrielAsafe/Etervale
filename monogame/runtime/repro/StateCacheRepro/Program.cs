@@ -36,6 +36,7 @@ namespace StateCacheRepro
         private bool _samplerDrawn;
         private RenderTarget2D? _retirementOutput;
         private bool _retirementDrawn;
+        private bool _shaderRetirementPending;
         private int _frame;
 
         public int Failures { get; private set; }
@@ -62,6 +63,7 @@ namespace StateCacheRepro
 
         protected override void Draw(GameTime gameTime)
         {
+            CheckShaderRetirementPixel();
             // Exercise recreation while the ordinary stress test continues drawing and checking pixels.
             if (_frame > 0 && _frame <= Math.Min(_frames, 8))
             {
@@ -155,7 +157,16 @@ namespace StateCacheRepro
         private void PixelConstantsTest()
         {
             var device = GraphicsDevice;
+            // Effect clones do not own shader modules; retire the actual cached source, not just its clone.
+            var field = typeof(GraphicsDevice).GetField("EffectCache",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            var cache = field?.GetValue(device) as Dictionary<int, Effect>
+                ?? throw new InvalidOperationException("Cannot locate the effect source cache for retirement repro.");
+            var priorKeys = cache.Keys.ToHashSet();
             var effect = Content.Load<Effect>("PixelConstants");
+            var added = cache.Keys.Where(key => !priorKeys.Contains(key)).ToArray();
+            if (added.Length != 1)
+                throw new InvalidOperationException("Expected exactly one new shader-owning effect source.");
             var colour = effect.Parameters["Colour"];
             device.SetRenderTarget(_target);
             device.Clear(Color.Black);
@@ -182,6 +193,36 @@ namespace StateCacheRepro
                 Failures++;
                 Console.WriteLine($"pixel constants: expected the second draw's {Color.Lime}, got {pixels[Size + 1]}");
             }
+
+            // This draw is not read back until after Present. Retiring the actual shader owner here must not
+            // destroy its descriptor pool or pipeline while the recorded draw still needs them.
+            device.SetRenderTarget(_target);
+            device.Clear(Color.Black);
+            colour.SetValue(Color.Blue.ToVector4());
+            effect.CurrentTechnique.Passes[0].Apply();
+            device.DrawUserPrimitives(PrimitiveType.TriangleStrip, quad, 0, 2);
+            device.SetRenderTarget(null);
+            var owner = cache[added[0]];
+            cache.Remove(added[0]);
+            effect.Dispose();
+            owner.Dispose();
+            _shaderRetirementPending = true;
+        }
+
+        private void CheckShaderRetirementPixel()
+        {
+            if (!_shaderRetirementPending)
+                return;
+            var pixels = new Color[Size * Size];
+            _target!.GetData(pixels);
+            if (pixels[Size + 1] != Color.Blue)
+            {
+                Failures++;
+                Console.WriteLine($"shader retirement: expected {Color.Blue}, got {pixels[Size + 1]}");
+            }
+            else
+                Console.WriteLine("PASS shader retirement before Present");
+            _shaderRetirementPending = false;
         }
 
         private void UniformOverflowTest()

@@ -239,3 +239,7 @@ See [sampler resource lifetime](../issues/038-sampler-resource-lifetime.md).
 ## Texture resource lifetime
 
 See [texture resource lifetime](../issues/039-texture-resource-lifetime.md).
+
+## Shader resource lifetime
+
+See [shader resource lifetime](../issues/040-shader-resource-lifetime.md).
