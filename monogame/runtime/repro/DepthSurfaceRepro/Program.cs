@@ -134,6 +134,38 @@ namespace DepthSurfaceRepro
             device.RasterizerState = RasterizerState.CullNone;
         }
 
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static WeakReference CreateUnownedTexture(GraphicsDevice device)
+        {
+            var texture = new Texture2D(device, Width, Height);
+            return new WeakReference(texture, trackResurrection: true);
+        }
+
+        private void CheckDeferredFinalization()
+        {
+            var device = GraphicsDevice;
+            var reference = CreateUnownedTexture(device);
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+
+            // The queue must keep the object alive, and must not have disposed it on the GC thread.
+            var texture = reference.Target as Texture2D;
+            if (texture is null || texture.IsDisposed)
+            {
+                Report("deferred finalization", false, "texture was not retained pending graphics-thread disposal");
+                return;
+            }
+
+            device.SetRenderTarget(null);
+            device.Clear(Color.Black);
+            device.Present();
+            Report("deferred finalization", texture.IsDisposed, "orphan disposed after Present");
+
+            using var explicitTexture = new Texture2D(device, Width, Height);
+            explicitTexture.Dispose();
+            Report("explicit disposal", explicitTexture.IsDisposed, "explicit disposal remains synchronous");
+        }
+
         protected override void Draw(GameTime gameTime)
         {
             GraphicsDevice.SetRenderTarget(_surface);
@@ -152,6 +184,7 @@ namespace DepthSurfaceRepro
             Check("clear of target and depth", "Load", _ => 1f);
 
             CheckMultisampleTargets();
+            CheckDeferredFinalization();
             Console.WriteLine($"{Failures} failed checks");
             Exit();
             base.Draw(gameTime);

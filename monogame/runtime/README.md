@@ -223,3 +223,7 @@ See [custom border feature detection](../issues/034-vulkan-1-0-custom-border-fea
 ## HDR render target multisample support
 
 See [render target MSAA capabilities](../issues/035-render-target-msaa-capabilities.md).
+
+## Native graphics resource finalization
+
+See [graphics-thread finalization](../issues/036-native-resource-finalization.md).

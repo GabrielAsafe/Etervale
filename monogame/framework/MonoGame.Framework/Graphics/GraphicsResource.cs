@@ -29,9 +29,29 @@ namespace Microsoft.Xna.Framework.Graphics
         /// <summary/>
         ~GraphicsResource()
         {
+#if NATIVE
+            // Etervale fork: native destruction must not race the graphics thread from the GC finalizer.
+            var device = graphicsDevice;
+            if (device != null)
+            {
+                device.EnqueueFinalizedResource(this);
+                return;
+            }
+#endif
             // Pass false so the managed objects are not released
             Dispose(false);
         }
+
+#if NATIVE
+        // Etervale fork: called by the device on its graphics thread, not by the GC finalizer.
+        internal void DisposeFinalizedResource()
+        {
+            if (!disposed)
+            {
+                Dispose(false);
+            }
+        }
+#endif
 
         /// <summary>
         /// Called before the device is reset. Allows graphics resources to 
@@ -118,7 +138,12 @@ namespace Microsoft.Xna.Framework.Graphics
 
                 graphicsDevice = value;
 
+#if NATIVE
+                // Etervale fork: shutdown must still see resources whose finalizers are pending or queued.
+                _selfReference = new WeakReference(this, trackResurrection: true);
+#else
                 _selfReference = new WeakReference(this);
+#endif
                 graphicsDevice.AddResourceReference(_selfReference);
             }
 		}
