@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""ADB end-to-end regression runner for the Debug-only Etervale APK 46."""
+import argparse
+import os
+import datetime
+import json
+import pathlib
+import queue
+import re
+import statistics
+import subprocess
+import threading
+import time
+
+PACKAGE = 'com.etervale.game'
+METRIC = re.compile(r'\bI ETERVALE_PERF:\s+FPS (\d+) \(cap ([^,]+), VSync (\w+)\).*?frame p95/p99 ([\d,.]+)/[\d,.]+ ms, work ([\d,.]+) ms, present ([\d,.]+) ms, pacing ([\d,.]+) ms,.*?\| (\d+)x(\d+) \|.*?\bPos (-?\d+) (-?\d+) \| Lights (\d+) \| Draw (\d+) .*?\bTri (\d+) .*?scene3D=(\d+)x(\d+).*?\bAA=(\w+) MSAA=(\d+)')
+PID = re.compile(r'^\d\d-\d\d\s+[\d:.]+\s+(\d+)\s+\d+\s+')
+ERROR = re.compile(r'\bE ETERVALE_VK_VALIDATION: (?:VUID-|UNASSIGNED-|SYNC-HAZARD|transfer failure:|fence.*(?:failed|exhausted))')
+CRASH = re.compile(r'Fatal signal|FATAL EXCEPTION')
+
+def parse(line):
+    m = METRIC.search(line)
+    if not m:
+        return None
+    a = m.groups()
+    return dict(fps=int(a[0]), cap=a[1], vsync=a[2], frame_ms=float(a[3].replace(',', '.')), work_ms=float(a[4].replace(',', '.')), present_ms=float(a[5].replace(',', '.')), pacing_ms=float(a[6].replace(',', '.')), width=int(a[7]), height=int(a[8]), position=[int(a[9]), int(a[10])], lights=int(a[11]), draws=int(a[12]), triangles=int(a[13]), scene=[int(a[14]), int(a[15])], aa=a[16], msaa=int(a[17]), shadows="Shadows ON" if "Shadows ON" in line else "Shadows OFF" if "Shadows OFF" in line else "unknown", graphics=line.split(" | quality=",1)[-1].split(" | finalizersQueued=",1)[0])
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--aa', choices=['current','Off','Fxaa','Taa','Smaa','Msaa'], default='current', help='Expected AA; current accepts a consistent existing setting')
+    p.add_argument('--startup-timeout', type=int, default=240)
+    p.add_argument('--serial', help='ADB serial (required if multiple devices are connected)')
+    p.add_argument('--seconds',type=int,default=20,help='Measurement duration per orientation (default 20)')
+    p.add_argument('--settle',type=int,default=8)
+    p.add_argument('--manual-rotation',action='store_true',help='Rotate by hand when prompted; all measurement is automatic')
+    p.add_argument('--out',type=pathlib.Path,default=pathlib.Path.home()/'etervale-regression')
+    args=p.parse_args()
+    if args.seconds<15 or args.settle<5: p.error('use at least 15 seconds and 5 seconds of settling')
+    account=os.environ.get('ETERVALE_TEST_USER','')
+    password=os.environ.get('ETERVALE_TEST_PASS','')
+    character=os.environ.get('ETERVALE_TEST_CHARACTER','')
+    if not all(re.fullmatch(r'[A-Za-z0-9._-]{1,20}', v) for v in (account,password)) or not character.strip() or len(character)>128 or any(c in character for c in '\r\n\0'):
+        p.error('set ETERVALE_TEST_USER, ETERVALE_TEST_PASS and ETERVALE_TEST_CHARACTER (login fields accept 1-20 ASCII letters/digits/._-)')
+    if args.startup_timeout<30: p.error('startup timeout must be at least 30 seconds')
+    # Child processes do not inherit test credentials. Send only the one-shot request via stdin.
+    clean_env={k:v for k,v in os.environ.items() if k not in ('ETERVALE_TEST_USER','ETERVALE_TEST_PASS','ETERVALE_TEST_CHARACTER')}
+    payload='\n'.join((account,password,character))+'\n'
+    del account,password,character
+    adb=['adb']+(['-s',args.serial] if args.serial else [])
+    def run(*cmd,check=True):
+        return subprocess.run(adb+list(cmd),capture_output=True,text=True,timeout=30,check=check,env=clean_env).stdout.strip()
+    def pid():
+        return run('shell','pidof',PACKAGE,check=False).split()
+    if run('get-state')!='device': raise SystemExit('ADB device unavailable')
+    folder=args.out/datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f'); folder.mkdir(parents=True)
+    report={'version':[], 'phases':[], 'validation_errors':[], 'fatal_signals':[], 'fence_timeouts':0,'fence_recovered':0, 'status':'INCOMPLETE'}
+    report['version']=[x.strip() for x in run('shell','dumpsys','package',PACKAGE).splitlines() if 'versionCode=' in x or 'versionName=' in x]
+    print('\n'.join(report['version']),flush=True)
+    if not any('versionCode=46 ' in v for v in report['version']):
+        raise SystemExit('APK 46 required for the Debug-only login request.')
+    game_pid=None
+    report['startup']={}
+    request_written=False
+    request_cleanup='run-as '+PACKAGE+' rm -f files/.etervale-e2e-request files/.etervale-e2e.tmp'
+    original=None; changed=False; proc=None; reader=None
+    events=queue.Queue(); logpath=folder/'logcat.txt'; failed=False
+    def pump():
+        with logpath.open('w',encoding='utf-8') as log:
+            for line in proc.stdout:
+                log.write(line); log.flush(); events.put(line.rstrip())
+    def inspect(line):
+        m=PID.match(line)
+        if not m or m.group(1)!=game_pid: return
+        if ERROR.search(line):
+            report['validation_errors'].append(line)
+            print('VULKAN ERROR:',line,flush=True)
+        if CRASH.search(line):
+            report['fatal_signals'].append(line)
+            raise RuntimeError('Game fatal signal')
+        if 'fence timeout:' in line: report['fence_timeouts']+=1
+        if 'fence recovered:' in line: report['fence_recovered']+=1
+    def consume(seconds, collect=False):
+        end=time.monotonic()+seconds; rows=[]
+        while time.monotonic()<end:
+            try: line=events.get(timeout=min(0.5,max(0.001,end-time.monotonic())))
+            except queue.Empty: continue
+            m=PID.match(line)
+            if not m or m.group(1)!=game_pid: continue
+            inspect(line)
+            if collect and (sample:=parse(line)): rows.append(sample)
+        if proc.poll() is not None: raise RuntimeError('Logcat exited')
+        if pid()!=[game_pid]:
+            report['process_changed']=True
+            raise RuntimeError('Game PID disappeared or changed')
+        return rows
+    try:
+        # Start from a closed app; no authentication retries.
+        run('shell','am','force-stop',PACKAGE)
+        if pid(): raise RuntimeError('Game still running after force-stop')
+        if not args.manual_rotation:
+            original=run('shell','cmd','window','user-rotation')
+            if not re.fullmatch(r'free|lock [0-3]',original): raise RuntimeError('Cannot read original rotation: '+original+'; retry --manual-rotation')
+            report['original_rotation']=original
+        proc=subprocess.Popen(adb+['logcat','-b','main','-b','system','-b','crash','-T','1','-v','threadtime','-s','ETERVALE_VK_VALIDATION:V','ETERVALE_BOOT:I','ETERVALE_PERF:I','ETERVALE_VK_ROTATION:I','ETERVALE_SDL_RESIZE:I','libc:F','DEBUG:F','AndroidRuntime:E'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1,env=clean_env)
+        reader=threading.Thread(target=pump,daemon=True); reader.start()
+        component=run('shell','cmd','package','resolve-activity','--brief','-a','android.intent.action.MAIN','-c','android.intent.category.LAUNCHER','-p',PACKAGE).splitlines()[-1]
+        if not component.startswith(PACKAGE+'/'): raise RuntimeError('Launcher component not resolved')
+        # No secrets in shell arguments, history or terminal output. The private file is deleted by the host on exit.
+        write='run-as '+PACKAGE+" sh -c 'umask 077; mkdir -p files && cat > files/.etervale-e2e.tmp && mv files/.etervale-e2e.tmp files/.etervale-e2e-request'"
+        request_written=True
+        result=subprocess.run(adb+['shell','-T',write],input=payload,text=True,capture_output=True,timeout=30,env=clean_env)
+        del payload
+        if result.returncode!=0: raise RuntimeError('Cannot write private debug request; verify run-as and APK Debug')
+        print('Cold start: waiting for real startup and authentication milestones.',flush=True)
+        run('shell','am','start','-W','-n',component)
+        deadline=time.monotonic()+args.startup_timeout
+        required={'regression_request_loaded','login_first_draw','regression_login_submitted','regression_login_succeeded','regression_roster_ready','regression_character_selected','gameplay_first_draw'}
+        marks=re.compile(r'ETERVALE_BOOT: stage=(\w+) elapsed_ms=([0-9.]+)')
+        last_pid_check=0
+        while time.monotonic()<deadline:
+            if proc.poll() is not None: raise RuntimeError('Logcat exited during startup')
+            if time.monotonic()-last_pid_check>3:
+                last_pid_check=time.monotonic()
+                current=pid()
+                if game_pid and current!=[game_pid]:
+                    report['process_changed']=True
+                    raise RuntimeError('Game PID disappeared or changed during startup')
+            try: line=events.get(timeout=0.5)
+            except queue.Empty: continue
+            m=PID.match(line)
+            if not m: continue
+            candidate=m.group(1)
+            mark=marks.search(line)
+            if game_pid is None and mark and mark.group(1)=='activity_on_create' and pid()==[candidate]:
+                game_pid=candidate; report['pid']=game_pid
+            if candidate!=game_pid: continue
+            inspect(line)
+            if mark:
+                stage,elapsed=mark.groups()
+                report['startup'][stage]=float(elapsed)
+                if stage in required or stage.startswith('regression_failed'):
+                    print(stage,elapsed+' ms',flush=True)
+                if stage.startswith('regression_failed'):
+                    raise RuntimeError(stage)
+                if stage=='gameplay_first_draw':
+                    if not required.issubset(report['startup']):
+                        raise RuntimeError('Missing required automatic login milestones')
+                    break
+        else: raise RuntimeError('Startup/gameplay timeout; inspect startup markers')
+        report['automatic_login']=True
+        print('Gameplay confirmed; running rotation regression.',flush=True)
+        for label,rotation,portrait in [('landscape_a','1',False),('portrait','0',True),('landscape_b','1',False)]:
+            print('\nPhase:',label,flush=True)
+            if args.manual_rotation:
+                input('Rotate to '+label+' and press Enter: ')
+            else:
+                changed=True
+                run('shell','cmd','window','user-rotation','lock',rotation)
+            consume(args.settle)
+            rows=consume(args.seconds,True)
+            matching=[r for r in rows if (r['height']>r['width'])==portrait]
+            phase={'name':label,'samples':rows,'matching':len(matching),'status':'INCOMPLETE'}; report['phases'].append(phase)
+            if len(matching)<3 or len(matching)!=len(rows):
+                print('Orientation not verified or insufficient samples. Check METRICAS; try --manual-rotation.',flush=True); continue
+            phase['median']={k:statistics.median(r[k] for r in matching) for k in ['fps','frame_ms','work_ms','present_ms','pacing_ms','draws','triangles','lights']}
+            phase['status']='PASS' if all(r['cap']=='unlimited' and r['vsync']=='off' and (args.aa=='current' or r['aa']==args.aa) and r['msaa']==0 and r['shadows']=='Shadows OFF' for r in matching) else 'SETTINGS_MISMATCH'
+            print(phase['status'],json.dumps(phase['median']),flush=True)
+        allrows=[r for phase in report['phases'] for r in phase['samples']]
+        report['same_position']=len({tuple(r['position']) for r in allrows})==1 if allrows else False
+        report['same_graphics']=len({r['graphics'] for r in allrows})==1 if allrows else False
+        report['same_scene_pixel_count']=len({r['scene'][0]*r['scene'][1] for r in allrows})==1 if allrows else False
+        report['status']='FAIL' if report['validation_errors'] or report['fatal_signals'] else ('PASS' if len(report['phases'])==3 and all(x['status']=='PASS' for x in report['phases']) and report['same_position'] and report['same_scene_pixel_count'] and report['same_graphics'] else 'INCOMPLETE')
+    except (Exception,KeyboardInterrupt) as exc:
+        report['status']='FAIL' if report['fatal_signals'] or report['validation_errors'] or report.get('process_changed') else 'INCOMPLETE'; report['interrupted']=str(exc) or type(exc).__name__
+        print('Stopped:',report['interrupted'],flush=True)
+    finally:
+        if request_written:
+            try:
+                run('shell',request_cleanup)
+                report['request_cleanup']=True
+            except Exception:
+                report['request_cleanup']=False
+                if report['status']=='PASS': report['status']='INCOMPLETE'
+        if changed and original:
+            try: run('shell','cmd','window','user-rotation',*original.split()); report['rotation_restored']=True
+            except Exception as exc: report['rotation_restored']=False; report['restore_error']=str(exc); report['status']='INCOMPLETE' if report['status']=='PASS' else report['status']
+        if proc:
+            proc.terminate()
+            try: proc.wait(timeout=5)
+            except subprocess.TimeoutExpired: proc.kill(); proc.wait()
+        if reader: reader.join(timeout=2)
+        (folder/'report.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
+        summary=[f"Status: {report['status']}",*report['version'],f"Validation errors: {len(report['validation_errors'])}",f"Fatal signals: {len(report['fatal_signals'])}",f"Fence timeouts/recovered: {report['fence_timeouts']}/{report['fence_recovered']}"]
+        for phase in report['phases']: summary.append(f"{phase['name']}: {phase['status']} | {phase['matching']} samples | {phase.get('median',{})}")
+        for key in ('same_position','same_scene_pixel_count','same_graphics','process_changed','rotation_restored','interrupted','restore_error','automatic_login','request_cleanup'):
+            if key in report: summary.append(f'{key}: {report[key]}')
+        for stage, elapsed in report['startup'].items(): summary.append(f'{stage}: {elapsed:.1f} ms')
+        (folder/'summary.txt').write_text('\n'.join(summary)+'\n',encoding='utf-8')
+        print('\n'+'\n'.join(summary)+'\nResults: '+str(folder),flush=True)
+    return 0 if report['status']=='PASS' else 1
+
+if __name__=='__main__':
+    raise SystemExit(main())
