@@ -19,7 +19,7 @@ internal static unsafe partial class MGG
     /// The interface version of monogame/runtime this framework is written for (MGVK_ETERVALE_RUNTIME_VERSION in
     /// MGG_Vulkan.cpp). Both change together, with every change of an exported function.
     /// </summary>
-    internal const int EtervaleRuntimeVersion = 8;
+    internal const int EtervaleRuntimeVersion = 9;
 
     [DllImport(MGP.MonoGameNativeDLL, EntryPoint = "MGG_Etervale_RuntimeVersion", ExactSpelling = true)]
     private static extern int Etervale_RuntimeVersion();
@@ -90,6 +90,9 @@ internal static unsafe partial class MGG
 
     [DllImport(MGP.MonoGameNativeDLL, EntryPoint = "MGG_TimestampPool_Read", ExactSpelling = true)]
     public static extern byte TimestampPool_Read(MGG_GraphicsDevice* device, nint pool, uint first, uint count, ulong* ticks);
+
+    [DllImport(MGP.MonoGameNativeDLL, EntryPoint = "MGG_TimestampPool_ReadElapsed", ExactSpelling = true)]
+    public static extern byte TimestampPool_ReadElapsed(MGG_GraphicsDevice* device, nint pool, uint first, ulong* ticks);
 
     [DllImport(MGP.MonoGameNativeDLL, EntryPoint = "MGG_TimestampPool_GetPeriod", ExactSpelling = true)]
     public static extern float TimestampPool_GetPeriod(MGG_GraphicsDevice* device);

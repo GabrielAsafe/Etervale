@@ -363,6 +363,7 @@ struct MGG_GraphicsDevice
 
 	std::recursive_mutex queueMutex;
 	uint32_t graphicsQueueFamily = 0;
+	uint32_t timestampValidBits = 0;
 	VkQueue queue = VK_NULL_HANDLE;
 	VkCommandPool cmdPool = VK_NULL_HANDLE;
 
@@ -1551,6 +1552,7 @@ MGG_GraphicsDevice* MGG_GraphicsDevice_Create(MGG_GraphicsSystem* system, MGG_Gr
 			if ((queueFamilyProps[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0)
 			{
 				device->graphicsQueueFamily = i;
+				device->timestampValidBits = queueFamilyProps[i].timestampValidBits;
 				break;
 			}
 		}
@@ -7414,7 +7416,7 @@ MG_EXPORT void MGG_GraphicsDevice_GetNativeHandles(const MGG_GraphicsDevice* dev
 // MGG.EnsureRuntimeVersion) checks before anything else: a library built from other sources (the official package, or
 // a stale build of the fork) would fail later at the first missing export, or worse, call an export whose arguments
 // changed. Bumped with every change of an exported function (monogame/issues/002-runtime-version.md).
-#define MGVK_ETERVALE_RUNTIME_VERSION 8
+#define MGVK_ETERVALE_RUNTIME_VERSION 9
 
 MG_EXPORT mgint MGG_Etervale_RuntimeVersion()
 {
@@ -7494,9 +7496,19 @@ MG_EXPORT mgint MGG_GraphicsDevice_GetPipelineStatistics(MGG_GraphicsDevice* dev
 // A pool holds `count` 64-bit timestamps. Reset a range at the start of a frame (outside any render pass), write
 // timestamps between draws, and read them back a few frames later without waiting.
 
+// Vulkan timestamps have only timestampValidBits meaningful bits. Subtract before converting to time.
+static uint64_t MGVK_ElapsedTimestampTicks(uint64_t begin, uint64_t end, uint32_t validBits)
+{
+	const uint64_t delta = end - begin;
+	return validBits == 64 ? delta : delta & ((uint64_t(1) << validBits) - 1);
+}
+
 MG_EXPORT void* MGG_TimestampPool_Create(MGG_GraphicsDevice* device, mguint count)
 {
 	assert(device != nullptr);
+	if (count == 0 || device->timestampValidBits == 0 || device->timestampValidBits > 64 ||
+		!(device->deviceProperties.limits.timestampPeriod > 0.0f))
+		return nullptr;
 	VkQueryPoolCreateInfo info = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
 	info.queryType = VK_QUERY_TYPE_TIMESTAMP;
 	info.queryCount = count;
@@ -7518,6 +7530,8 @@ MG_EXPORT void MGG_TimestampPool_Destroy(MGG_GraphicsDevice* device, void* pool)
 MG_EXPORT mgbool MGG_TimestampPool_Reset(MGG_GraphicsDevice* device, void* pool, mguint first, mguint count)
 {
 	assert(device != nullptr);
+	if (pool == nullptr || device->frameIndex >= device->frames.size())
+		return false;
 	auto& frame = device->frames[device->frameIndex];
 	// vkCmdResetQueryPool is not allowed inside a render pass, and ending one here would change its load/store.
 	if (!frame.is_recording || device->inRenderPass)
@@ -7529,6 +7543,8 @@ MG_EXPORT mgbool MGG_TimestampPool_Reset(MGG_GraphicsDevice* device, void* pool,
 MG_EXPORT void MGG_TimestampPool_Write(MGG_GraphicsDevice* device, void* pool, mguint index)
 {
 	assert(device != nullptr);
+	if (pool == nullptr || device->frameIndex >= device->frames.size())
+		return;
 	auto& frame = device->frames[device->frameIndex];
 	if (!frame.is_recording)
 		return;
@@ -7541,6 +7557,20 @@ MG_EXPORT mgbool MGG_TimestampPool_Read(MGG_GraphicsDevice* device, void* pool, 
 	VkResult result = vkGetQueryPoolResults(device->device, (VkQueryPool)pool, first, count,
 		count * sizeof(mgulong), ticks, sizeof(mgulong), VK_QUERY_RESULT_64_BIT);
 	return result == VK_SUCCESS;
+}
+
+MG_EXPORT mgbool MGG_TimestampPool_ReadElapsed(MGG_GraphicsDevice* device, void* pool, mguint first, mgulong* ticks)
+{
+	assert(device != nullptr);
+	if (pool == nullptr || ticks == nullptr || device->timestampValidBits == 0 || device->timestampValidBits > 64)
+		return false;
+	mgulong pair[2] = {};
+	const VkResult result = vkGetQueryPoolResults(device->device, (VkQueryPool)pool, first, 2,
+		sizeof(pair), pair, sizeof(mgulong), VK_QUERY_RESULT_64_BIT);
+	if (result != VK_SUCCESS)
+		return false;
+	*ticks = MGVK_ElapsedTimestampTicks(pair[0], pair[1], device->timestampValidBits);
+	return true;
 }
 
 MG_EXPORT mgfloat MGG_TimestampPool_GetPeriod(MGG_GraphicsDevice* device)

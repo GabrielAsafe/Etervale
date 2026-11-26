@@ -196,13 +196,13 @@ public sealed class PristonFrameProfiler : IDisposable
                 continue;
             }
 
-            if (!_queries.TryGetNanoseconds(query * 2 + 1, out var end) || !_queries.TryGetNanoseconds(query * 2, out var begin))
+            if (!_queries.TryGetElapsedNanoseconds(query * 2, out var nanoseconds))
             {
                 GpuResultsMissed++;
                 continue;
             }
 
-            var milliseconds = end >= begin ? (end - begin) * 1e-6 : 0d;
+            var milliseconds = nanoseconds * 1e-6;
             _gpuSum[section] += milliseconds;
             _gpuCount[section]++;
         }

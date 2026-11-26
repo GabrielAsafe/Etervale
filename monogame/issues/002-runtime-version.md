@@ -28,6 +28,7 @@ change. A library from elsewhere fails late and obscurely:
   pipeline statistics (issue 012). Version 4: NoOverwrite uploads in place (issue 013). Version 5: the 32-bit float
   depth format (issue 014). Version 6: depth surfaces (issue 016). Version 7: the maximized state of a window (issue
   017). Version 8: render target multisample capabilities (issue 035).
+  Version 9: elapsed GPU timestamp pairs (issue 042).
 
 ## Test
 

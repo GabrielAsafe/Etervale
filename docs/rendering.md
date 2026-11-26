@@ -450,7 +450,8 @@ they took the domes.
   changes, dynamic upload bytes, sun shadow update, lamp shadow cube maps redrawn (`L` in the title), shadow draw
   calls. Shown in the window title (`Ctrl+F3`).
 - `Profiler` (`PristonFrameProfiler`): CPU time per `RenderSection`; GPU time from Vulkan timestamps after
-  `EnableGpuTimers` (benchmark only), read back 4 frames later without waiting.
+  `EnableGpuTimers` (benchmark only), read back 4 frames later without waiting. Durations use the selected queue
+  family's timestamp width; unsupported queues leave GPU timing unavailable.
 - `LastStreamingStats`: per `StreamingStep` count, total and worst main-thread milliseconds and bytes of the last stage
   upload (`[Stream] upload steps` log line).
 - `--benchmark-render <assets> <content> <report.json> <fieldId> <settings.json> [seconds runs hour orbit [distance
