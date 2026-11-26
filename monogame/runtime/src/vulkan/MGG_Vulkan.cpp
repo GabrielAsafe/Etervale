@@ -1632,16 +1632,26 @@ MGG_GraphicsDevice* MGG_GraphicsDevice_Create(MGG_GraphicsSystem* system, MGG_Gr
 	VkPhysicalDeviceCustomBorderColorFeaturesEXT customBorderColorFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT };
 	if (device->customBorderColorSupported)
 	{
+		// The instance requests Vulkan 1.0; use the enabled KHR extension entry point.
+		auto getPhysicalDeviceFeatures2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2KHR>(
+			vkGetInstanceProcAddr(system->instance, "vkGetPhysicalDeviceFeatures2KHR"));
 		VkPhysicalDeviceCustomBorderColorFeaturesEXT supportedCbc = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT };
-		VkPhysicalDeviceFeatures2 supportedFeatures2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+		VkPhysicalDeviceFeatures2KHR supportedFeatures2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR };
 		supportedFeatures2.pNext = &supportedCbc;
-		vkGetPhysicalDeviceFeatures2(device->physicalDevice, &supportedFeatures2);
+		if (getPhysicalDeviceFeatures2)
+			getPhysicalDeviceFeatures2(device->physicalDevice, &supportedFeatures2);
 
-		extensions.push_back(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
-		customBorderColorFeatures.customBorderColors = supportedCbc.customBorderColors;
-		customBorderColorFeatures.customBorderColorWithoutFormat = supportedCbc.customBorderColorWithoutFormat;
-		customBorderColorFeatures.pNext = lastFeature;
-		lastFeature = &customBorderColorFeatures;
+		// Samplers use VK_FORMAT_UNDEFINED for custom borders, so both features are required.
+		device->customBorderColorSupported = getPhysicalDeviceFeatures2 != nullptr &&
+			supportedCbc.customBorderColors == VK_TRUE && supportedCbc.customBorderColorWithoutFormat == VK_TRUE;
+		if (device->customBorderColorSupported)
+		{
+			extensions.push_back(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
+			customBorderColorFeatures.customBorderColors = VK_TRUE;
+			customBorderColorFeatures.customBorderColorWithoutFormat = VK_TRUE;
+			customBorderColorFeatures.pNext = lastFeature;
+			lastFeature = &customBorderColorFeatures;
+		}
 	}
 	VkPhysicalDeviceScalarBlockLayoutFeatures scalarFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES };
 	if (scalarBlockLayoutSupported)

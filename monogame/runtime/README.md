@@ -215,3 +215,7 @@ The runtime is MonoGame's code, under the Microsoft Public License (`../LICENSE-
 ## Surface alpha and resource-free graphics programs
 
 See [surface alpha and empty descriptor binds](../issues/033-desktop-surface-alpha-descriptors.md).
+
+## Vulkan 1.0 custom border colours
+
+See [custom border feature detection](../issues/034-vulkan-1-0-custom-border-features.md).
