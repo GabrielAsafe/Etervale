@@ -441,6 +441,7 @@ public sealed partial class GameplayHud
         }
 
         if ((!OperatingSystem.IsAndroid() && HudBar.Captures(design))
+            || MobileOverlayAllowed && Mobile.CentralHudVisible && Mobile.CentralHudBounds(layout).Contains(pointer)
             || MinimapShown && (Mobile.Enabled ? Mobile.MapBounds(layout) : HudMinimap.Box(layout)).Contains(pointer) // ETERVALE_MOBILE_HUD_EDITOR_V33 || _skillHud.BuffAt(pointer) != 0
             || WindowContains(layout, _inventorySlide, pointer) || WindowContains(layout, _statusSlide, pointer) || WindowContains(layout, _skillSlide, pointer)
             || _skills.MasterBoxShown && HudSkillTreeLayout.MasterBox.Contains(pointer))

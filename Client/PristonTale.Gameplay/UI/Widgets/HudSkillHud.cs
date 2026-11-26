@@ -93,10 +93,10 @@ public sealed class HudSkillHud : IDisposable
     }
 
     // Icons over the bottom bar's sockets; y is the bar's vertical offset in the design space.
-    public void DrawSockets(HudPainter painter, int y, uint leftSkill, uint rightSkill, SkillCooldownBook cooldowns, double nowMs)
+    public void DrawSockets(HudPainter painter, int y, uint leftSkill, uint rightSkill, SkillCooldownBook cooldowns, double nowMs, int x = 0)
     {
-        DrawSocket(painter, HudBar.Socket(false), y, leftSkill, cooldowns, nowMs);
-        DrawSocket(painter, HudBar.Socket(true), y, rightSkill, cooldowns, nowMs);
+        DrawSocket(painter, HudBar.OffsetSocket(false, x), y, leftSkill, cooldowns, nowMs);
+        DrawSocket(painter, HudBar.OffsetSocket(true, x), y, rightSkill, cooldowns, nowMs);
     }
 
     // The status whose icon is under the pointer in the buff bar, as last drawn (0 for none).

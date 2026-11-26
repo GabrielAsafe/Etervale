@@ -126,39 +126,10 @@ public sealed class HudBar
     public void Draw(HudPainter painter, HudLayout layout, OwnerState state, HudBarView view)
     {
         var y = layout.BottomOffset;
-        painter.Sprite(HudArt.Menu1, 288, 472 + y);
+        painter.Sprite(HudArt.Menu1, CentralLeft, CentralTop + y);
         painter.Sprite(HudArt.Menu2, 544, 536 + y);
         DrawGrow(painter, layout);
-        painter.Sprite(HudArt.PotionBack, 495, 565 + y);
-        if (state is not null)
-        {
-            var life = Length(LifeLength, state.Life, state.MaxLife);
-            var mana = Length(ManaLength, state.Mana, state.MaxMana);
-            var stamina = Length(StaminaLength, state.Stamina, state.MaxStamina);
-            painter.Sprite(HudArt.Life, 319, 500 + y + LifeLength - life, GaugeSource(16, LifeLength, life));
-            painter.Sprite(HudArt.Mana, 465, 500 + y + ManaLength - mana, GaugeSource(16, ManaLength, mana));
-            painter.Sprite(HudArt.Stamina, 303, 518 + y + StaminaLength - stamina, GaugeSource(8, StaminaLength, stamina));
-
-            // The experience fills Menu-1's narrow slot right of the mana, under its "NL." (next level) label, from the bottom
-            // up as the other gauges.
-            var experience = (int)(ExperienceLength * ExperienceFraction(state));
-            painter.Sprite(HudArt.Experience, 485, 508 + y + ExperienceLength - experience, GaugeSource(6, ExperienceLength, experience));
-        }
-
-        var (day, time) = TimeGauge(view.TimeOfDay);
-        if (day)
-        {
-            painter.Sprite(HudArt.Sun, 363, 589 + y);
-            painter.Sprite(HudArt.Time, 375, 593 + y, new Rectangle(0, 0, time, 5));
-        }
-        else
-        {
-            painter.Sprite(HudArt.Moon, 426, 589 + y);
-            painter.Sprite(HudArt.Time, 375 + TimeLength - time, 593 + y, new Rectangle(TimeLength - time, 0, time, 5));
-        }
-
-        DrawSocket(painter, Socket(false), y, view.LeftSkill);
-        DrawSocket(painter, Socket(true), y, view.RightSkill);
+        DrawCentralContents(painter, 0, y, state, view);
 
         if (!view.Running)
         {
@@ -171,6 +142,65 @@ public sealed class HudBar
         }
 
         DrawButtons(painter, layout, view);
+    }
+
+    // Menu-1 spans 256 units; the original three potion slots extend the block to x=573.
+    internal const int CentralLeft = 288;
+    internal const int CentralTop = 472;
+    internal const int CentralWidth = 285;
+    internal const int CentralHeight = 128;
+
+    // Leave the existing two rows of mobile shortcuts below the classic block.
+    internal static Rectangle MobileCentralBounds(HudLayout layout) =>
+        new((layout.Width - CentralWidth) / 2, layout.Height - 256, CentralWidth, CentralHeight);
+
+    internal static Point CentralOrigin(Rectangle bounds) => new(bounds.X - CentralLeft, bounds.Y - CentralTop);
+
+    internal static Rectangle OffsetSocket(bool right, int x)
+    {
+        var socket = Socket(right);
+        socket.Offset(x, 0);
+        return socket;
+    }
+
+    internal void DrawMobileCentral(HudPainter painter, Point origin, OwnerState state, HudBarView view)
+    {
+        painter.Sprite(HudArt.Menu1, CentralLeft + origin.X, CentralTop + origin.Y);
+        DrawCentralContents(painter, origin.X, origin.Y, state, view);
+    }
+
+    private static void DrawCentralContents(HudPainter painter, int x, int y, OwnerState state, HudBarView view)
+    {
+        painter.Sprite(HudArt.PotionBack, x + 495, 565 + y);
+        if (state is not null)
+        {
+            var life = Length(LifeLength, state.Life, state.MaxLife);
+            var mana = Length(ManaLength, state.Mana, state.MaxMana);
+            var stamina = Length(StaminaLength, state.Stamina, state.MaxStamina);
+            painter.Sprite(HudArt.Life, x + 319, 500 + y + LifeLength - life, GaugeSource(16, LifeLength, life));
+            painter.Sprite(HudArt.Mana, x + 465, 500 + y + ManaLength - mana, GaugeSource(16, ManaLength, mana));
+            painter.Sprite(HudArt.Stamina, x + 303, 518 + y + StaminaLength - stamina, GaugeSource(8, StaminaLength, stamina));
+
+            // The experience fills Menu-1's narrow slot right of the mana, under its "NL." (next level) label, from the bottom
+            // up as the other gauges.
+            var experience = (int)(ExperienceLength * ExperienceFraction(state));
+            painter.Sprite(HudArt.Experience, x + 485, 508 + y + ExperienceLength - experience, GaugeSource(6, ExperienceLength, experience));
+        }
+
+        var (day, time) = TimeGauge(view.TimeOfDay);
+        if (day)
+        {
+            painter.Sprite(HudArt.Sun, x + 363, 589 + y);
+            painter.Sprite(HudArt.Time, x + 375, 593 + y, new Rectangle(0, 0, time, 5));
+        }
+        else
+        {
+            painter.Sprite(HudArt.Moon, x + 426, 589 + y);
+            painter.Sprite(HudArt.Time, x + 375 + TimeLength - time, 593 + y, new Rectangle(TimeLength - time, 0, time, 5));
+        }
+
+        DrawSocket(painter, OffsetSocket(false, x), y, view.LeftSkill);
+        DrawSocket(painter, OffsetSocket(true, x), y, view.RightSkill);
     }
 
     public void DrawHoverText(HudPainter painter, HudLayout layout, OwnerState state, Point pointer)

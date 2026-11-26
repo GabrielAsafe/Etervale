@@ -36,4 +36,8 @@
     <AndroidAsset Include="ContentStaging/**/*.xnb"
                   LogicalName="Content/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
+  <ItemGroup Condition="'$(Configuration)' == 'Debug' and '$(EtervaleValidationLayer)' != ''">
+    <AndroidNativeLibrary Include="$(EtervaleValidationLayer)"
+                          Link="lib/arm64-v8a/libVkLayer_khronos_validation.so" />
+  </ItemGroup>
 </Project>

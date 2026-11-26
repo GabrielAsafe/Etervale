@@ -1,4 +1,6 @@
 using Microsoft.Xna.Framework;
+using System.Diagnostics;
+using PristonTale.Engine3D.Diagnostics;
 using Microsoft.Xna.Framework.Input;
 using PristonTale.Engine3D.Formats;
 using PristonTale.Gameplay.Screens.Framework;
@@ -19,7 +21,53 @@ public sealed class GameplayScreen : GameScreen
     private readonly List<GroundLabel> _groundLabels = [];
     private KeyboardState _lastKeyboard;
     private bool _showRenderStats = true;
+    private double _perfPortraitMs;
+    private double _perfSceneMs;
+    private double _perfHudMs;
+    private long _lastGpuPerfLog;
+    private bool _mobileFirstGameplayDraw;
+
+    // CPU wall-clock timings include driver stalls; they are not GPU timestamps.
+    private string MobilePerfStatus()
+    {
+        if (!OperatingSystem.IsAndroid() || _scene.Renderer is not { } renderer)
+            return string.Empty;
+        var p = renderer.Profiler;
+        LogGpuPerf(p);
+        var sceneSize = renderer.SceneRenderSize;
+        return $" | scene3D={sceneSize.X}x{sceneSize.Y}"
+            + $" | depthPrepass={(renderer.SceneLinearDepth is null ? "off" : "on")}"
+            + $" | CPU draw: scene {_perfSceneMs:F1} HUD {_perfHudMs:F1} portrait {_perfPortraitMs:F1} ms"
+            + $" | CPU passes: prepass {p.CpuLast(RenderSection.Prepass):F1} opaque {p.CpuLast(RenderSection.Opaque):F1} masked {p.CpuLast(RenderSection.Masked):F1}"
+            + $" | CPU passes: sky {p.CpuLast(RenderSection.Sky):F1} lights {p.CpuLast(RenderSection.LightCulling):F1} shadows {p.CpuLast(RenderSection.SunShadow):F1}"
+            + $" | CPU passes: display {p.CpuLast(RenderSection.DisplayTransform):F1} exposure {p.CpuLast(RenderSection.Exposure):F1} queue {p.CpuLast(RenderSection.Queue):F1}";
+    }
     private volatile PristonTale.Client.Net.WorldCatalog.WorldRenderCatalog _pendingHudCatalog;
+
+    private void LogGpuPerf(PristonFrameProfiler profiler)
+    {
+        var now = Stopwatch.GetTimestamp();
+        if (_lastGpuPerfLog != 0 && Stopwatch.GetElapsedTime(_lastGpuPerfLog, now).TotalSeconds < 3)
+        {
+            return;
+        }
+
+        _lastGpuPerfLog = now;
+        if (!profiler.GpuTimersAvailable)
+        {
+            MobileDiagnosticTrace.WritePerformance("GPU timers=unavailable");
+            return;
+        }
+
+        MobileDiagnosticTrace.WritePerformance("GPU mean_ms/samples (cumulative since renderer creation)"
+            + $" | total={profiler.GpuSampleSummary(RenderSection.SceneTotal)} world={profiler.GpuSampleSummary(RenderSection.Frame)}"
+            + $" | sky={profiler.GpuSampleSummary(RenderSection.Sky)} opaque={profiler.GpuSampleSummary(RenderSection.Opaque)}"
+            + $" | masked={profiler.GpuSampleSummary(RenderSection.Masked)} transparent={profiler.GpuSampleSummary(RenderSection.Transparent)}"
+            + $" | glow={profiler.GpuSampleSummary(RenderSection.Glow)} lightCulling={profiler.GpuSampleSummary(RenderSection.LightCulling)}"
+            + $" | exposure={profiler.GpuSampleSummary(RenderSection.Exposure)} display={profiler.GpuSampleSummary(RenderSection.DisplayTransform)}"
+            + $" | aa={profiler.GpuSampleSummary(RenderSection.PostAntiAliasing)} prepass={profiler.GpuSampleSummary(RenderSection.Prepass)}"
+            + $" | resetMissed={profiler.GpuResetMissed} readMissed={profiler.GpuResultsMissed}");
+    }
 
     public GameplayScreen(ScreenContext context, EnteredCharacter entered) : base(context)
     {
@@ -28,8 +76,10 @@ public sealed class GameplayScreen : GameScreen
 
     public override void Enter()
     {
+        MobileDiagnosticTrace.Mark("gameplay_enter_begin");
         _scene = new GameScene(Context.GraphicsDevice, Context.Content, Context.Log, Context.Sky, Context.Effects, Context.Presentation, Context.Audio);
         _scene.LoadEntered(Context.AssetRoot, _entered);
+        MobileDiagnosticTrace.Mark("first_field_loaded");
         _hud = new GameplayHud(
             Context,
             _scene.ApplyInventoryAsync,
@@ -133,7 +183,7 @@ public sealed class GameplayScreen : GameScreen
                    $"Draw {stats.DrawCalls} | Pose {poses.Posed}/{poses.Posed + poses.Reused} | " +
                    $"Shadow S{(stats.SunShadowUpdated ? 1 : 0)}/L{stats.LampShadowMapsUpdated}/D{stats.ShadowDrawCalls} | " +
                    $"Vis {stats.VisibleBatches}/{stats.TotalBatches} | Tri {stats.Triangles} | State {stats.StateChanges} | " +
-                   $"View {_scene.RenderDebugView}";
+                   $"View {_scene.RenderDebugView}" + MobilePerfStatus();
         }
     }
 
@@ -165,10 +215,13 @@ public sealed class GameplayScreen : GameScreen
         if (Context.Presentation.AwaitingConfirmation) _hud.Mobile.Reset(preservePointer: true);
         else _hud.Mobile.Update(Context.GraphicsDevice.Viewport, gameTime,
             Context.IsWindowActive,
-            _hud.MobileOverlayAllowed, _hud.MobileTyping, backAvailable: _hud.MobileBackAllowed);
+            _hud.MobileOverlayAllowed, _hud.MobileTyping, backAvailable: _hud.MobileBackAllowed, skillPanel: _hud.MobileSkillPanel);
         // ETERVALE_MOBILE_INPUT_V24: CONFIG no HUD mobile usa as definicoes globais do Etervale.
         if (_hud.Mobile.SettingsRequested) _hud.OpenSettings();
-        if (_hud.Mobile.ShortcutBindRequested >= 0) _hud.BindMobileShortcut(_hud.Mobile.ShortcutBindRequested); // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34
+        if (_hud.Mobile.TakeDiagnosticsRequest() && Context.IsWindowActive && !Context.Presentation.AwaitingConfirmation)
+        {
+            Context.ToggleDiagnostics();
+        }
         if (_hud.Mobile.PanelCloseRequested) _hud.ClosePanel();
         // ETERVALE_MOBILE_HUD_EDITOR_V33: botão FALAR partilha o caminho de aproximação NPC do rato.
         if (_hud.Mobile.MapRequested) _hud.ToggleMobileMap(); // ETERVALE_MOBILE_UI_V32
@@ -213,12 +266,24 @@ public sealed class GameplayScreen : GameScreen
 
     public override void Draw()
     {
+        var mobile = OperatingSystem.IsAndroid();
+        var started = mobile ? Stopwatch.GetTimestamp() : 0L;
         _hud.RenderPortrait();
+        if (mobile) _perfPortraitMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        started = mobile ? Stopwatch.GetTimestamp() : 0L;
         Context.GraphicsDevice.Clear(_scene.SkyColor);
         _scene.Draw();
+        if (mobile) _perfSceneMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        started = mobile ? Stopwatch.GetTimestamp() : 0L;
         _scene.CollectGroundLabels(_groundLabels);
         _scene.DrawCombatText(Context.SpriteBatch, Context.Font);
         _hud.Draw();
+        if (mobile) _perfHudMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        if (mobile && !_mobileFirstGameplayDraw)
+        {
+            _mobileFirstGameplayDraw = true;
+            MobileDiagnosticTrace.Mark("gameplay_first_draw");
+        }
     }
 
     private void UpdateMotionKeys()

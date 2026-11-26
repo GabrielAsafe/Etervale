@@ -588,7 +588,9 @@ public sealed partial class GameScene : IDisposable, IHudPortraitScene
     {
         if (_renderer != null && _camera != null)
         {
-            _renderer.Draw(_camera);
+            // The Android gameplay experiment scales only the 3D scene; composition restores the native HUD viewport.
+            _renderer.Draw(_camera, OperatingSystem.IsAndroid() ? 50 : 100,
+                skipOptionalDepthPrepass: OperatingSystem.IsAndroid(), profileGpu: OperatingSystem.IsAndroid());
             DrawRain();
             DrawSkillEffects();
             _renderer.ComposeScene();

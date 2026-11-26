@@ -13,6 +13,10 @@ file(GLOB_RECURSE NATIVE_CPP CONFIGURE_DEPENDS
 
 add_library(mgruntime SHARED ${NATIVE_CPP})
 target_compile_features(mgruntime PRIVATE cxx_std_17)
+option(ETERVALE_VK_VALIDATION "Enable packaged Android Vulkan validation diagnostics" OFF)
+if(ETERVALE_VK_VALIDATION)
+    target_compile_definitions(mgruntime PRIVATE ETERVALE_VK_VALIDATION)
+endif()
 target_compile_definitions(mgruntime PRIVATE DLL_EXPORT MG_SDL2 MG_VULKAN MG_FAUDIO VK_USE_PLATFORM_ANDROID_KHR NDEBUG)
 target_include_directories(mgruntime PRIVATE
     "${ETERVALE_NATIVE_SOURCE}/include"

@@ -562,6 +562,7 @@ seguem para a torre alta.</value></data>
   <data name="Login.Hint" xml:space="preserve"><value>Conecte-se ao servidor do jogo</value></data>
   <data name="Login.LogIn" xml:space="preserve"><value>Entrar</value></data>
   <data name="Login.Password" xml:space="preserve"><value>Senha</value></data>
+  <data name="Login.SkipIntro" xml:space="preserve"><value>Toque para pular</value></data>
   <data name="Login.Subtitle" xml:space="preserve"><value>Sua aventura começa aqui</value></data>
   <data name="Login.Unreachable" xml:space="preserve"><value>Não foi possível alcançar o servidor do jogo.</value></data>
   <data name="Loot.Gold" xml:space="preserve"><value>{0} de ouro</value></data>

@@ -684,6 +684,9 @@ namespace Microsoft.Xna.Framework.Graphics
             {
                 if (disposing)
                 {
+#if NATIVE
+                    DrainNativeFinalizers();
+#endif
                     // Dispose of all remaining graphics resources before disposing of the graphics device
                     lock (_resourcesLock)
                     {

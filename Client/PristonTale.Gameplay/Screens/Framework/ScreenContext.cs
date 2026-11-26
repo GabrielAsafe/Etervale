@@ -66,6 +66,8 @@ public sealed class ScreenContext
     // Set when the server asked the client to save and quit; the game closes like the window's close button.
     public bool ExitRequested { get; set; }
 
+    internal Action ToggleDiagnostics { get; set; } = static () => { };
+
     public void RequestScreen(GameScreen next) => _requestScreen(next);
 
     // Replaces a backend that already logged in or lost its connection; the old one is disposed off the game thread.

@@ -29,6 +29,11 @@ namespace Microsoft.Xna.Framework.Graphics
         /// <summary/>
         ~GraphicsResource()
         {
+#if NATIVE
+            // Etervale fork: the Android finalizer thread must not mutate Vulkan resource caches.
+            if (graphicsDevice?.DeferNativeFinalizer(this) == true)
+                return;
+#endif
             // Pass false so the managed objects are not released
             Dispose(false);
         }
@@ -43,6 +48,14 @@ namespace Microsoft.Xna.Framework.Graphics
         {
 
         }
+
+#if NATIVE
+        internal void CompleteDeferredFinalizer()
+        {
+            if (!disposed)
+                Dispose(false);
+        }
+#endif
 
         /// <inheritdoc cref="IDisposable.Dispose()"/>
         public void Dispose()
@@ -118,7 +131,12 @@ namespace Microsoft.Xna.Framework.Graphics
 
                 graphicsDevice = value;
 
+#if NATIVE
+                // A device being disposed can still find resources awaiting finalization.
+                _selfReference = new WeakReference(this, value.DefersNativeFinalizers);
+#else
                 _selfReference = new WeakReference(this);
+#endif
                 graphicsDevice.AddResourceReference(_selfReference);
             }
 		}

@@ -163,6 +163,9 @@ Since the C# half was forked too (`../issues/001-framework-from-source.md`), eac
 29. **Maximized state** (`MGP_Window_GetIsMaximized`, `MGP_Window_Maximize`, `../issues/017-window-maximize.md`;
     interface version 7): whether the SDL window is maximized, and maximizing it.
 
+30. **Android surface rotation** (`../issues/018-android-surface-rotation.md`): use the identity presentation
+    transform when supported, because the renderer draws in logical window coordinates rather than pre-rotating images.
+
 The runtime also prints the swapchain image count and present mode, an early submission when the uniform buffer is
 full, and a warning when two resources of one shader share a binding.
 
@@ -211,3 +214,21 @@ The runtime is MonoGame's code, under the Microsoft Public License (`../LICENSE-
 - `src/` (with the fork's changes), the patch and the built libraries are distributed under the MS-PL;
 - the vendored and statically linked libraries keep their own licences (`CREDITS.md`);
 - Etervale's own code uses the runtime as a separate library.
+
+See [Vulkan swapchain resource lifetime](../issues/021-vulkan-swapchain-lifetime.md) for the retirement and
+recreation contract. Android serial presentation remains enabled.
+
+See [Vulkan sampler retirement](../issues/022-vulkan-sampler-lifetime.md) for the deferred sampler lifetime contract.
+
+See [Vulkan owned texture retirement](../issues/023-vulkan-texture-lifetime.md) for the owned image and depth attachment lifetime contract.
+
+See [Vulkan shader and descriptor-pool retirement](../issues/024-vulkan-shader-lifetime.md) for the deferred shader lifetime contract.
+
+The current Android diagnostic presentation path waits for the submitted render fence rather than the entire queue.
+See [Android render-fence presentation experiment](../issues/025-android-render-fence-present.md).
+
+See [Android packaged Vulkan validation diagnostics](../issues/027-android-packaged-validation.md) for the opt-in diagnostic build.
+
+Swapchain creation selects a supported composite alpha mode. See [surface alpha selection](../issues/028-swapchain-composite-alpha.md).
+
+Vulkan 1.0 extended feature queries use the enabled KHR entry point. See [feature queries](../issues/029-vulkan-1-0-feature-query.md).

@@ -666,6 +666,8 @@ mgbyte MGP_Platform_PollEvent(MGP_Platform* platform, MGP_Event& event_)
                     int width = 0, height = 0;
                     SDL_Vulkan_GetDrawableSize(window, &width, &height);
                     if (width > 0 && height > 0) { event_.Window.Data1 = width; event_.Window.Data2 = height; }
+                    SDL_Log("ETERVALE_SDL_RESIZE event=%dx%d; drawable=%dx%d; forwarded=%dx%d",
+                        ev.window.data1, ev.window.data2, width, height, event_.Window.Data1, event_.Window.Data2);
                 }
 #endif
                 return true;

@@ -20,6 +20,38 @@ public partial class GraphicsDevice
 
     private int _currentFrame = -1;
 
+    /// <summary>Enable render-thread finalization before creating an Android graphics device with serial presentation.</summary>
+    public static bool EtervaleAndroidDeferredFinalizers { get; set; }
+
+    internal bool DefersNativeFinalizers { get; } = EtervaleAndroidDeferredFinalizers;
+    private readonly NativeResourceFinalizerQueue<GraphicsResource> _nativeFinalizers = new();
+
+    /// <summary>Number of resource finalizers accepted by the device's deferred queue.</summary>
+    public long EtervaleNativeFinalizersQueued => _nativeFinalizers.QueuedCount;
+
+    /// <summary>Number of queued finalizers processed at a graphics-device boundary.</summary>
+    public long EtervaleNativeFinalizersDrained => _nativeFinalizers.DrainedCount;
+
+    /// <summary>Number of finalizer requests rejected after the native device started closing.</summary>
+    public long EtervaleNativeFinalizersRejected => _nativeFinalizers.RejectedCount;
+
+    internal bool DeferNativeFinalizer(GraphicsResource resource)
+    {
+        if (!DefersNativeFinalizers)
+            return false;
+
+        // Even after closure, never fall back to a native call from the finalizer thread.
+        _nativeFinalizers.TryEnqueue(resource);
+        return true;
+    }
+
+    private void DrainNativeFinalizers()
+    {
+        if (DefersNativeFinalizers)
+            _nativeFinalizers.Drain(static resource => resource.CompleteDeferredFinalizer());
+    }
+
+
     private readonly Dictionary<int, DynamicVertexBuffer> _userVertexBuffers = new Dictionary<int, DynamicVertexBuffer>();
     private DynamicIndexBuffer _userIndexBuffer16;
     private DynamicIndexBuffer _userIndexBuffer32;
@@ -270,6 +302,9 @@ public partial class GraphicsDevice
 
         DefaultTexture.Dispose();
 
+        if (DefersNativeFinalizers)
+            _nativeFinalizers.CloseAndDrain(static resource => resource.CompleteDeferredFinalizer());
+
         if (Handle != null)
         {
             MGG.GraphicsDevice_Destroy(Handle);
@@ -285,6 +320,8 @@ public partial class GraphicsDevice
         var syncInterval = PresentationParameters.PresentationInterval.GetSyncInterval();
         MGG.GraphicsDevice_Present(Handle, _currentFrame, syncInterval);
         _currentFrame = -1;
+        // Android serial Present has completed GPU work before this boundary.
+        DrainNativeFinalizers();
     }
 
     private unsafe void PlatformSetViewport(ref Viewport viewport)

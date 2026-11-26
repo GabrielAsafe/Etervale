@@ -109,7 +109,14 @@ public sealed class LoginPanel
         var layout = LoginLayout.Create(viewport.Width, viewport.Height);
         var tint = InputEnabled ? Color.White : new Color(155, 155, 155);
         _canvas.Begin(layout.Scale);
-        _canvas.Image("LoginPanel", layout.Panel);
+        if (layout.Compact)
+        {
+            _canvas.Frame(layout.Panel, "Inset", 12);
+        }
+        else
+        {
+            _canvas.Image("LoginPanel", layout.Panel);
+        }
         _canvas.Text("ETERVALE", layout.Title, pixels: 30f, centered: true);
         _canvas.Text(ClientText.Get("Login.Subtitle"), layout.Subtitle, HudCanvas.Muted, 17f, centered: true);
         DrawField(ClientText.Get("Login.Account"), Account, layout.Account, tint);

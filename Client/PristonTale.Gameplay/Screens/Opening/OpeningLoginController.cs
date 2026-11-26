@@ -50,6 +50,7 @@ internal sealed class OpeningLoginController : IDisposable
         _audio.Play(LoginCue.Login);
         _login.Status = "Connecting…";
         _login.InputEnabled = false;
+        LoginPanel.AndroidKeyboardRequested?.Invoke(false);
         _phase = Phase.Authenticating;
         _loginCts = new CancellationTokenSource();
         if (_context.Backend.RequiresNewConnection)
@@ -88,6 +89,7 @@ internal sealed class OpeningLoginController : IDisposable
 
     public void Dispose()
     {
+        LoginPanel.AndroidKeyboardRequested?.Invoke(false);
         _loginCts?.Cancel();
         _loginCts?.Dispose();
         if (_loginTask is not null)

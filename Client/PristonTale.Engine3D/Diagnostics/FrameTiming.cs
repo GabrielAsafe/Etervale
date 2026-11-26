@@ -67,7 +67,7 @@ public sealed class FrameTiming
         _allocations[index] += Math.Max(0, allocatedBytes);
     }
 
-    public bool TrySample(long now, out FrameTimingSample sample)
+    public bool TrySample(long now, out FrameTimingSample sample, int maxFrames = int.MaxValue)
     {
         sample = default;
         if (_count == 0 || now - _lastSample < Stopwatch.Frequency / 2)
@@ -79,8 +79,13 @@ public sealed class FrameTiming
         var total = 0d;
         var overBudget = 0;
         var allocatedBytes = 0L;
-        for (var index = 0; index < _count; index++)
+        // The newest frames, even after the ring wraps. A shorter window responds
+        // to quality changes on slow devices without changing desktop sampling.
+        var count = Math.Min(_count, Math.Max(1, maxFrames));
+        var first = (_next + Capacity - count) % Capacity;
+        for (var offset = 0; offset < count; offset++)
         {
+            var index = (first + offset) % Capacity;
             total += _frames[index];
             allocatedBytes += _allocations[index];
             if (_frames[index] > 1000d / 60)
@@ -89,20 +94,21 @@ public sealed class FrameTiming
             }
         }
 
-        var frames = Percentiles(_frames);
-        var work = Percentiles(_work);
-        var presentation = Percentiles(_presentation);
-        sample = new FrameTimingSample(_count * 1000d / total, frames.P95, frames.P99, work.P95, work.P99,
-            (double)allocatedBytes / _count, overBudget, presentation.P95, presentation.P99, Percentiles(_pacing).P95);
+        var frames = Percentiles(_frames, first, count);
+        var work = Percentiles(_work, first, count);
+        var presentation = Percentiles(_presentation, first, count);
+        sample = new FrameTimingSample(count * 1000d / total, frames.P95, frames.P99, work.P95, work.P99,
+            (double)allocatedBytes / count, overBudget, presentation.P95, presentation.P99, Percentiles(_pacing, first, count).P95);
         return true;
     }
 
-    private (double P95, double P99) Percentiles(double[] values)
+    private (double P95, double P99) Percentiles(double[] values, int first, int count)
     {
-        Array.Copy(values, _scratch, _count);
-        _scratch.AsSpan(0, _count).Sort();
-        var p95 = _scratch[Math.Clamp((int)Math.Ceiling(_count * 0.95) - 1, 0, _count - 1)];
-        var p99 = _scratch[Math.Clamp((int)Math.Ceiling(_count * 0.99) - 1, 0, _count - 1)];
+        for (var offset = 0; offset < count; offset++)
+            _scratch[offset] = values[(first + offset) % Capacity];
+        _scratch.AsSpan(0, count).Sort();
+        var p95 = _scratch[Math.Clamp((int)Math.Ceiling(count * 0.95) - 1, 0, count - 1)];
+        var p99 = _scratch[Math.Clamp((int)Math.Ceiling(count * 0.99) - 1, 0, count - 1)];
         return (p95, p99);
     }
 

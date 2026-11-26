@@ -52,8 +52,8 @@ namespace Microsoft.Xna.Framework.Graphics
         /// frame's command buffer, before they are written again.
         /// </summary>
         /// <returns>
-        /// False when the device is inside a render pass, where Vulkan forbids the reset (ending the pass would change its
-        /// load and store), or not recording a frame: the caller leaves that frame untimed.
+        /// False when the device is not recording a frame or is inside a render pass with no pending target switch.
+        /// A pending target switch allows the old pass to end before the reset; the next draw begins the new pass.
         /// </returns>
         public unsafe bool Reset(int first, int count)
         {

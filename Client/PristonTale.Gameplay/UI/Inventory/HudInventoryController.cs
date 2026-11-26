@@ -183,12 +183,12 @@ public sealed class HudInventoryController(ScreenContext context, Func<Inventory
         _carryAt = revision;
     }
 
-    public void Update(OwnerState state, HudLayout layout, bool visible, KeyboardState keyboard, MouseState mouse)
+    public void Update(OwnerState state, HudLayout layout, bool visible, KeyboardState keyboard, MouseState mouse, Point? origin = null)
     {
         _state = state;
         _visible = visible;
         SoundArrival(state);
-        _origin = HudInventoryLayout.Origin(layout);
+        _origin = origin ?? HudInventoryLayout.Origin(layout);
         var completed = _completedOperation;
         if (completed is not null)
         {

@@ -28,6 +28,7 @@
 #include <deque>
 #include <vector>
 #include <thread>
+#include <chrono>
 #include <string>
 #include <cstdlib>
 #include <cstring>
@@ -56,6 +57,26 @@
 #include <volk.h>
 #endif
 
+
+#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
+#include <android/log.h>
+
+static thread_local const char* MGVK_TransferDiagnosticPath = nullptr;
+
+static VKAPI_ATTR VkBool32 VKAPI_CALL MGVK_AndroidValidationCallback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT,
+    const VkDebugUtilsMessengerCallbackDataEXT* data, void*)
+{
+    const int priority = (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) ? ANDROID_LOG_ERROR : ANDROID_LOG_WARN;
+    if (priority == ANDROID_LOG_ERROR && MGVK_TransferDiagnosticPath)
+        __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "transferPath=%s", MGVK_TransferDiagnosticPath);
+    __android_log_print(priority, "ETERVALE_VK_VALIDATION", "%s: %s",
+        data && data->pMessageIdName ? data->pMessageIdName : "validation",
+        data && data->pMessage ? data->pMessage : "(no message)");
+    return VK_FALSE;
+}
+#endif
+
 #define VMA_IMPLEMENTATION
 #define VMA_STATIC_VULKAN_FUNCTIONS 1
 #include <vk_mem_alloc.h>
@@ -64,6 +85,10 @@
 #include <SDL_vulkan.h>
 #include <SDL_syswm.h>
 #include <SDL_events.h>
+#endif
+
+#if defined(__ANDROID__)
+#include <android/log.h>
 #endif
 
 #ifdef _WIN32
@@ -419,6 +444,9 @@ struct MGG_GraphicsDevice
 	bool shaderDirty = false;
 	std::map<uint64_t, MGVK_Program*> shader_programs;
 	std::vector<MGG_Shader*> all_shaders;
+	// Etervale fork: destruction requests may arrive independently of frame recording.
+	std::mutex shaderRetirementMutex;
+	std::queue<MGG_Shader*> retiredShaders;
 
 	VkPipelineCache pipelineCache = VK_NULL_HANDLE;
 	// Etervale fork: exact-match caches (change 6). The hash only picks the bucket; entries are compared in full.
@@ -489,6 +517,8 @@ struct MGG_Texture
 {
 	FrameCounter writeFrame = -1;
 	FrameCounter frame = 0;
+	// Etervale fork: owned textures survive the frame in which retirement was requested.
+	FrameCounter retireFrame = 0;
 	// Etervale fork: the frame whose command buffer holds an upload into this texture (MGG_Texture_SetData), -1 if none.
 	FrameCounter uploadFrame = -1;
 
@@ -560,6 +590,9 @@ struct MGVK_InputLocation
 struct MGG_Shader
 {
 	uint32_t id;
+	bool retirementRequested = false; // protected by shaderRetirementMutex
+	bool retirementStarted = false;   // render-thread only
+	FrameCounter retireFrame = 0;
 
 	MGShaderStage stage;
 
@@ -639,6 +672,8 @@ struct MGG_RasterizerState
 struct MGG_SamplerState
 {
 	uint64_t id;
+	// Etervale fork: retirement starts no earlier than the last frame in which this sampler is bound.
+	FrameCounter retireFrame = 0;
 	VkSampler sampler;
 	MGG_SamplerState_Info info;
 };
@@ -665,10 +700,11 @@ static void MGVK_BufferCopyAndFlush(MGG_GraphicsDevice* device, MGG_Buffer* buff
 static MGG_Buffer* MGVK_Buffer_Create(MGG_GraphicsDevice* device, MGBufferType type, mgint sizeInBytes, bool no_push);
 static void MGVK_DestroyPipelines(MGG_GraphicsDevice* device, std::function<bool(const MGVK_PipelineState&)> compare);
 static void MGVK_DestroyFrameResources(MGG_GraphicsDevice* device, FrameCounter currentFrame, mgbyte free_all);
+static void MGVK_RetireShaders(MGG_GraphicsDevice* device, bool shutdown);
 static void MGVK_UpdateRenderPass(MGG_GraphicsDevice* device, FrameCounter currentFrame, VkCommandBuffer commandBuffer);
 static VkCommandBuffer MGVK_BeginNewCommandBuffer(MGG_GraphicsDevice* device, VkCommandPool pool = VK_NULL_HANDLE);
 static void MGVK_ExecuteAndFreeCommandBuffer(MGG_GraphicsDevice* device, VkCommandBuffer commandBuffer, VkCommandPool pool = VK_NULL_HANDLE);
-static void MGVK_ProcessDescriptorCaches(MGG_GraphicsDevice* device, FrameCounter currentFrame);
+static void MGVK_ProcessDescriptorCaches(MGG_GraphicsDevice* device, FrameCounter currentFrame, bool all = false);
 static void MGVK_CmdTransitionImageLayout(
 	VkCommandBuffer cmd,
 	VkImage image,
@@ -680,6 +716,7 @@ static void MGVK_CmdTransitionImageLayout(
 	uint32_t baseArrayLayer = 0,
 	uint32_t layerCount = 1);
 static void MGVK_FlushCommands(MGG_GraphicsDevice* device, MGVK_Frame& frame);
+static void MGVK_WaitForCompletedFence(MGG_GraphicsDevice* device, VkFence fence, const char* operation);
 static void MGVK_PrepareFrame(MGG_GraphicsDevice* device);
 static void MGVK_CleanupPendingTransfers(MGG_GraphicsDevice* device);
 static void MGVK_WaitPendingTransfers(MGG_GraphicsDevice* device, MGG_Texture* texture);
@@ -1216,6 +1253,42 @@ MGG_GraphicsSystem* MGG_GraphicsSystem_Create()
 			printf("Validation layers aren't supported (you might want to install the Vulkan SDK to support them).\n");
 	}
 
+
+#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
+    const char* validationLayer = "VK_LAYER_KHRONOS_validation";
+    if (!AreValidationLayersSupported())
+    {
+        __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "Layer not available in APK");
+        return nullptr;
+    }
+    if (std::none_of(enabledLayers.begin(), enabledLayers.end(), [validationLayer](const char* name) { return strcmp(name, validationLayer) == 0; }))
+        enabledLayers.push_back(validationLayer);
+
+    uint32_t validationExtensionCount = 0;
+    VkResult validationResult = vkEnumerateInstanceExtensionProperties(validationLayer, &validationExtensionCount, nullptr);
+    if (validationResult != VK_SUCCESS)
+    {
+        __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "Layer extension enumeration failed: %d", validationResult);
+        return nullptr;
+    }
+    std::vector<VkExtensionProperties> validationExtensions(validationExtensionCount);
+    validationResult = vkEnumerateInstanceExtensionProperties(validationLayer, &validationExtensionCount, validationExtensions.data());
+    if (validationResult != VK_SUCCESS ||
+        (!SupportsExtension(supportedInstanceExtensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) &&
+         !SupportsExtension(validationExtensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)))
+    {
+        __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "Debug utils extension unavailable: %d", validationResult);
+        return nullptr;
+    }
+    if (std::none_of(instanceExtensions.begin(), instanceExtensions.end(), [](const char* name) { return strcmp(name, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0; }))
+        instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+
+    VkDebugUtilsMessengerCreateInfoEXT validationMessengerInfo = { VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
+    validationMessengerInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    validationMessengerInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    validationMessengerInfo.pfnUserCallback = MGVK_AndroidValidationCallback;
+#endif
+
 	VkInstanceCreateInfo instance_create_info = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
 	instance_create_info.pApplicationInfo = &app_info;
 	instance_create_info.enabledExtensionCount = instanceExtensions.size();
@@ -1223,6 +1296,51 @@ MGG_GraphicsSystem* MGG_GraphicsSystem_Create()
 	instance_create_info.enabledLayerCount = enabledLayers.size();
 	instance_create_info.ppEnabledLayerNames = enabledLayers.data();
 	instance_create_info.pNext = nullptr;
+#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
+    // Layer settings belong only to instance creation, not messenger creation.
+    const VkBool32 syncValidationEnabled = VK_TRUE;
+#if defined(VK_EXT_layer_settings)
+    const bool hasLayerSettings = SupportsExtension(validationExtensions, VK_EXT_LAYER_SETTINGS_EXTENSION_NAME) ||
+        SupportsExtension(supportedInstanceExtensions, VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
+    const VkLayerSettingEXT syncSetting = { validationLayer, "validate_sync", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &syncValidationEnabled };
+    VkLayerSettingsCreateInfoEXT syncSettings = { VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT };
+    syncSettings.pNext = &validationMessengerInfo;
+    syncSettings.settingCount = 1;
+    syncSettings.pSettings = &syncSetting;
+#else
+    const bool hasLayerSettings = false;
+#endif
+    const VkValidationFeatureEnableEXT syncFeature = VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
+    VkValidationFeaturesEXT syncFeatures = { VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT };
+    syncFeatures.pNext = &validationMessengerInfo;
+    syncFeatures.enabledValidationFeatureCount = 1;
+    syncFeatures.pEnabledValidationFeatures = &syncFeature;
+    const char* syncExtension = nullptr;
+#if defined(VK_EXT_layer_settings)
+    if (hasLayerSettings)
+    {
+        syncExtension = VK_EXT_LAYER_SETTINGS_EXTENSION_NAME;
+        instance_create_info.pNext = &syncSettings;
+    }
+#endif
+    if (!hasLayerSettings)
+    {
+        if (!SupportsExtension(validationExtensions, VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME) &&
+            !SupportsExtension(supportedInstanceExtensions, VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME))
+        {
+            __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "Synchronization validation extension unavailable");
+            return nullptr;
+        }
+        syncExtension = VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME;
+        instance_create_info.pNext = &syncFeatures;
+    }
+    if (std::none_of(instanceExtensions.begin(), instanceExtensions.end(), [syncExtension](const char* name) { return strcmp(name, syncExtension) == 0; }))
+        instanceExtensions.push_back(syncExtension);
+    // The vector may have reallocated when the validation extension was added.
+    instance_create_info.enabledExtensionCount = instanceExtensions.size();
+    instance_create_info.ppEnabledExtensionNames = instanceExtensions.data();
+    __android_log_print(ANDROID_LOG_INFO, "ETERVALE_VK_VALIDATION", "Synchronization validation requested via %s", syncExtension);
+#endif
 
 	VkInstance instance = VK_NULL_HANDLE;
 
@@ -1237,7 +1355,29 @@ MGG_GraphicsSystem* MGG_GraphicsSystem_Create()
 	volkLoadInstance(instance);
 #endif
 
+
+#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
+    VkDebugUtilsMessengerEXT validationMessenger = VK_NULL_HANDLE;
+    if (!vkCreateDebugUtilsMessengerEXT || !vkDestroyDebugUtilsMessengerEXT)
+    {
+        __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "Debug messenger entry points unavailable");
+        vkDestroyInstance(instance, nullptr);
+        return nullptr;
+    }
+    validationResult = vkCreateDebugUtilsMessengerEXT(instance, &validationMessengerInfo, nullptr, &validationMessenger);
+    if (validationResult != VK_SUCCESS)
+    {
+        __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "Debug messenger creation failed: %d", validationResult);
+        vkDestroyInstance(instance, nullptr);
+        return nullptr;
+    }
+    __android_log_print(ANDROID_LOG_INFO, "ETERVALE_VK_VALIDATION", "VK_LAYER_KHRONOS_validation ACTIVE (14E.5, nonempty descriptor binds, async present)");
+#endif
+
 	auto system = new MGG_GraphicsSystem();
+#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
+	system->debugMessenger = validationMessenger;
+#endif
 	system->instance = instance;
 	system->supportsPhysicalDeviceProperties2EXT = supportsProperties2EXT;
 
@@ -1285,6 +1425,10 @@ void MGG_GraphicsSystem_Destroy(MGG_GraphicsSystem* system)
     // Destroy the Vulkan instance
 	if (system->instance)
 	{
+#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
+		if (system->debugMessenger != VK_NULL_HANDLE)
+			vkDestroyDebugUtilsMessengerEXT(system->instance, system->debugMessenger, nullptr);
+#endif
 		vkDestroyInstance(system->instance, nullptr);
 	}
 
@@ -1513,7 +1657,7 @@ static void MGVK_FlushCommands(MGG_GraphicsDevice* device, MGVK_Frame& frame)
 		std::lock_guard lock(device->queueMutex);
 		vkQueueSubmit(device->queue, 1, &submitInfo, renderFence);
 	}
-	vkWaitForFences(device->device, 1, &renderFence, VK_TRUE, UINT64_MAX);
+	MGVK_WaitForCompletedFence(device, renderFence, "flush frame commands");
 	vkDestroyFence(device->device, renderFence, nullptr);
 }
 
@@ -1568,6 +1712,77 @@ static VkBufferUsageFlags ToUsage(MGBufferType type)
 	}
 }
 
+// Transfer submission and retirement must not continue on an unsuccessful VkResult, even in Release.
+// Do not add a queue-wide wait to the frame path. A failed Vulkan call is fatal until device recovery exists.
+static void MGVK_RequireTransferSuccess(VkResult result, const char* operation)
+{
+    if (result == VK_SUCCESS)
+        return;
+#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
+    __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "transfer failure: %s VkResult=%d", operation, (int)result);
+#endif
+    fprintf(stderr, "Vulkan transfer failure: %s VkResult=%d\n", operation, (int)result);
+    std::abort();
+}
+
+// Older Mali drivers can report VK_TIMEOUT even for an infinite wait when a signal interrupts it.
+// Retry the same submitted fence, never reset/free a fence or its resources on timeout.
+// The Android wait uses finite slices and a bounded retry budget, not a queue-wide idle.
+static void MGVK_WaitForCompletedFence(MGG_GraphicsDevice* device, VkFence fence, const char* operation)
+{
+#if defined(__ANDROID__)
+    const auto start = std::chrono::steady_clock::now();
+    unsigned timeouts = 0;
+    for (;;)
+    {
+        const VkResult result = vkWaitForFences(device->device, 1, &fence, VK_TRUE, 1000000000ULL);
+        if (result == VK_SUCCESS)
+        {
+#if defined(ETERVALE_VK_VALIDATION)
+            if (timeouts != 0)
+                __android_log_print(ANDROID_LOG_INFO, "ETERVALE_VK_VALIDATION",
+                    "fence recovered: %s retries=%u", operation, timeouts);
+#endif
+            return;
+        }
+        if (result != VK_TIMEOUT)
+        {
+            MGVK_RequireTransferSuccess(result, operation);
+            return;
+        }
+        ++timeouts;
+#if defined(ETERVALE_VK_VALIDATION)
+        if (timeouts == 1)
+            __android_log_print(ANDROID_LOG_WARN, "ETERVALE_VK_VALIDATION",
+                "fence timeout: %s; retrying same fence", operation);
+#endif
+        if (std::chrono::steady_clock::now() - start >= std::chrono::seconds(30))
+        {
+            MGVK_RequireTransferSuccess(VK_TIMEOUT, operation);
+            return;
+        }
+        // Avoid a busy loop if the driver returns a timeout immediately.
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+#else
+    MGVK_RequireTransferSuccess(vkWaitForFences(device->device, 1, &fence, VK_TRUE, UINT64_MAX), operation);
+#endif
+}
+
+struct MGVK_TransferDiagnosticScope
+{
+#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
+    const char* previous;
+    explicit MGVK_TransferDiagnosticScope(const char* path) : previous(MGVK_TransferDiagnosticPath)
+    {
+        MGVK_TransferDiagnosticPath = path;
+    }
+    ~MGVK_TransferDiagnosticScope() { MGVK_TransferDiagnosticPath = previous; }
+#else
+    explicit MGVK_TransferDiagnosticScope(const char*) {}
+#endif
+};
+
 static VkCommandBuffer MGVK_BeginNewCommandBuffer(MGG_GraphicsDevice* device, VkCommandPool pool)
 {
 	VkCommandBufferAllocateInfo allocInfo = {};
@@ -1577,28 +1792,29 @@ static VkCommandBuffer MGVK_BeginNewCommandBuffer(MGG_GraphicsDevice* device, Vk
 	allocInfo.commandBufferCount = 1;
 
 	VkCommandBuffer commandBuffer;
-	vkAllocateCommandBuffers(device->device, &allocInfo, &commandBuffer);
+	MGVK_RequireTransferSuccess(vkAllocateCommandBuffers(device->device, &allocInfo, &commandBuffer), "allocate transfer command buffer");
 	VK_SET_OBJECT_NAME(device->device, commandBuffer, VK_OBJECT_TYPE_COMMAND_BUFFER, "MGVK_BeginNewCommandBuffer::commandBuffer");
 
 	VkCommandBufferBeginInfo beginInfo = {};
 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-	vkBeginCommandBuffer(commandBuffer, &beginInfo);
+	MGVK_RequireTransferSuccess(vkBeginCommandBuffer(commandBuffer, &beginInfo), "begin transfer command buffer");
 
 	return commandBuffer;
 }
 
 static void MGVK_ExecuteAndFreeCommandBuffer(MGG_GraphicsDevice* device, VkCommandBuffer commandBuffer, VkCommandPool pool)
 {
-	vkEndCommandBuffer(commandBuffer);
+	MGVK_TransferDiagnosticScope diagnostic("ExecuteAndFreeCommandBuffer");
+	MGVK_RequireTransferSuccess(vkEndCommandBuffer(commandBuffer), "end immediate transfer");
 
 	VkFence renderFence;
 	{
 		VkFenceCreateInfo fenceCreateInfo = {};
 		fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 		fenceCreateInfo.flags = 0;
-		vkCreateFence(device->device, &fenceCreateInfo, nullptr, &renderFence);
+		MGVK_RequireTransferSuccess(vkCreateFence(device->device, &fenceCreateInfo, nullptr, &renderFence), "create immediate transfer fence");
 		VK_SET_OBJECT_NAME(device->device, renderFence, VK_OBJECT_TYPE_FENCE, "MGVK_ExecuteAndFreeCommandBuffer.renderFence");
 	}
 
@@ -1610,10 +1826,10 @@ static void MGVK_ExecuteAndFreeCommandBuffer(MGG_GraphicsDevice* device, VkComma
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &commandBuffer;
 
-		vkQueueSubmit(device->queue, 1, &submitInfo, renderFence);
+		MGVK_RequireTransferSuccess(vkQueueSubmit(device->queue, 1, &submitInfo, renderFence), "submit immediate transfer");
 	}
 
-	vkWaitForFences(device->device, 1, &renderFence, VK_TRUE, UINT64_MAX);
+	MGVK_WaitForCompletedFence(device, renderFence, "wait immediate transfer");
 	vkDestroyFence(device->device, renderFence, nullptr);
 
 	pool = pool ? pool : device->cmdPool;
@@ -1751,16 +1967,29 @@ MGG_GraphicsDevice* MGG_GraphicsDevice_Create(MGG_GraphicsSystem* system, MGG_Gr
 	VkPhysicalDeviceCustomBorderColorFeaturesEXT customBorderColorFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT };
 	if (device->customBorderColorSupported)
 	{
+		// The instance requests Vulkan 1.0, so use the enabled KHR extension entry point.
+		auto getFeatures2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2KHR>(
+			vkGetInstanceProcAddr(system->instance, "vkGetPhysicalDeviceFeatures2KHR"));
 		VkPhysicalDeviceCustomBorderColorFeaturesEXT supportedCbc = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT };
-		VkPhysicalDeviceFeatures2 supportedFeatures2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+		VkPhysicalDeviceFeatures2KHR supportedFeatures2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR };
 		supportedFeatures2.pNext = &supportedCbc;
-		vkGetPhysicalDeviceFeatures2(device->physicalDevice, &supportedFeatures2);
+		if (getFeatures2)
+			getFeatures2(device->physicalDevice, &supportedFeatures2);
 
-		extensions.push_back(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
-		customBorderColorFeatures.customBorderColors = supportedCbc.customBorderColors;
-		customBorderColorFeatures.customBorderColorWithoutFormat = supportedCbc.customBorderColorWithoutFormat;
-		customBorderColorFeatures.pNext = lastFeature;
-		lastFeature = &customBorderColorFeatures;
+		// The sampler path uses VK_FORMAT_UNDEFINED and requires both feature bits.
+		device->customBorderColorSupported = getFeatures2 && supportedCbc.customBorderColors && supportedCbc.customBorderColorWithoutFormat;
+		if (device->customBorderColorSupported)
+		{
+			extensions.push_back(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
+			customBorderColorFeatures.customBorderColors = VK_TRUE;
+			customBorderColorFeatures.customBorderColorWithoutFormat = VK_TRUE;
+			customBorderColorFeatures.pNext = lastFeature;
+			lastFeature = &customBorderColorFeatures;
+		}
+#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
+		__android_log_print(ANDROID_LOG_INFO, "ETERVALE_VK_VALIDATION", "Features2KHR available=%d; customBorderColor=%d",
+			getFeatures2 != nullptr, device->customBorderColorSupported);
+#endif
 	}
 	VkPhysicalDeviceScalarBlockLayoutFeatures scalarFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES };
 	if (scalarBlockLayoutSupported)
@@ -1901,8 +2130,15 @@ static void MGVK_CleanupSwapChain(MGG_GraphicsDevice* device)
 		vkQueueWaitIdle(device->queue);
 	}
 
-	// Destroy all the frame resources.
+	// The backbuffer wrappers belong to this swapchain, not to the next one.
+	for (size_t i = 0; i < MGVK_NUM_TARGETS; i++)
+	{
+		if (device->targets.targets[i] && device->targets.targets[i]->isSwapchain)
+			device->targets.targets[i] = nullptr;
+	}
 	device->pipelineState.targets = nullptr;
+	device->renderTargetDirty = true;
+	device->pipelineStateDirty = true;
 
 	// Destroy framebuffers and render passes that are dependent on the swapchain.
 	// We iterate this way because we are removing elements from the map.
@@ -1930,7 +2166,8 @@ static void MGVK_CleanupSwapChain(MGG_GraphicsDevice* device)
 					return s.targets == targetSetCache;
 				});
 
-			// This cache entry uses the swapchain, so it's safe to destroy.
+			// The framebuffer must release its attachment views before those views are destroyed.
+			vkDestroyFramebuffer(device->device, targetSetCache->framebuffer, nullptr);
 			for (int i = 0; i < MGVK_NUM_TARGETS; ++i)
 			{
 				auto& view = targetSetCache->arraySlicesViews[i];
@@ -1939,7 +2176,6 @@ static void MGVK_CleanupSwapChain(MGG_GraphicsDevice* device)
 				}
 			}
 			vkDestroyRenderPass(device->device, targetSetCache->renderPass, nullptr);
-			vkDestroyFramebuffer(device->device, targetSetCache->framebuffer, nullptr);
 			delete targetSetCache;
 
 			// Erase the element and get an iterator to the next one.
@@ -1953,13 +2189,7 @@ static void MGVK_CleanupSwapChain(MGG_GraphicsDevice* device)
 		}
 	}
 
-	if (device->swapchain != VK_NULL_HANDLE)
-	{
-		vkDestroySwapchainKHR(device->device, device->swapchain, nullptr);
-		device->swapchain = VK_NULL_HANDLE;
-	}
-
-	// Cleanup the swap chain images.
+	// Release the views and owned attachments before destroying the swapchain images.
 	for (size_t i = 0; i < device->swapchainCount; i++)
 	{
 		auto& swap = device->swapchains[i];
@@ -1969,9 +2199,8 @@ static void MGVK_CleanupSwapChain(MGG_GraphicsDevice* device)
 		if (chain == nullptr)
 			continue;
 
-		// Note the image is freed by vkDestroySwapchainKHR.
+		// The swapchain owns the image; only its view belongs to this wrapper.
 		vkDestroyImageView(device->device, chain->target_view, nullptr);
-		vmaFreeMemory(device->allocator, chain->allocation);
 
 		// Cleanup MSAA resolve image.
 		if (chain->msImage != nullptr)
@@ -1988,6 +2217,12 @@ static void MGVK_CleanupSwapChain(MGG_GraphicsDevice* device)
 		}
 
 		delete chain;
+	}
+
+	if (device->swapchain != VK_NULL_HANDLE)
+	{
+		vkDestroySwapchainKHR(device->device, device->swapchain, nullptr);
+		device->swapchain = VK_NULL_HANDLE;
 	}
 }
 
@@ -2013,15 +2248,7 @@ void MGG_GraphicsDevice_Destroy(MGG_GraphicsDevice* device)
 
 	MGVK_CleanupSwapChain(device);
 
-	for (auto pair : device->shader_programs)
-	{
-		vkDestroyPipelineLayout(device->device, pair.second->layout, nullptr);
-		delete pair.second;
-	}
-	device->shader_programs.clear();
-
-	vkDestroyPipelineCache(device->device, device->pipelineCache, nullptr);
-
+	// Shader programs and pools are retired after all frame command buffers have been freed.
 	while (device->all_buffers.size() > 0)
 		MGG_Buffer_Destroy(device, device->all_buffers[0]);
 
@@ -2043,11 +2270,23 @@ void MGG_GraphicsDevice_Destroy(MGG_GraphicsDevice* device)
 	vkDestroyCommandPool(device->device, device->transferPool, nullptr);
 	vkDestroyCommandPool(device->device, device->cmdPool, nullptr);
 
+	// The existing device-idle wait has completed; no command buffer will reference these pools again.
+	MGVK_RetireShaders(device, true);
+	vkDestroyPipelineCache(device->device, device->pipelineCache, nullptr);
+
 	for (int i=0; i < 3; i++)
 		MGG_Texture_Destroy(device, device->nullTexture[i]);
 
-	for (size_t i = 0; i < device->swapchainCount; i++)
-		MGVK_DestroyFrameResources(device, i, true);
+	// No further draws are possible and the device is idle. Release the retired samplers even if they were bound.
+	memset(device->samplers, 0, sizeof(device->samplers));
+	// No further commands can use the owned texture bindings at final device teardown.
+	memset(device->textures, 0, sizeof(device->textures));
+	for (auto& stage : device->uavs)
+		for (auto& binding : stage)
+			binding = {};
+	device->targets = {};
+	// Also drain when the device was destroyed before a swapchain was created.
+	MGVK_DestroyFrameResources(device, device->frame, true);
 
 	if (device->surface != nullptr)
 		vkDestroySurfaceKHR(device->instance, device->surface, nullptr);
@@ -2318,7 +2557,41 @@ void MGVK_RecreateSwapChain(
 	create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	create_info.preTransform = surface_capabilities.currentTransform;
-	create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+#if defined(__ANDROID__)
+    // The renderer uses the logical window orientation, not pre-rotated images.
+    // Ask the presentation engine to rotate them instead.
+    if (surface_capabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+        create_info.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    __android_log_print(ANDROID_LOG_INFO, "ETERVALE_VK_ROTATION",
+        "requested=%ux%u; current=%ux%u; extent=%ux%u; transform=%u; preTransform=%u; supported=%u",
+        width, height, surface_capabilities.currentExtent.width, surface_capabilities.currentExtent.height,
+        extent.width, extent.height, static_cast<unsigned>(surface_capabilities.currentTransform),
+        static_cast<unsigned>(create_info.preTransform), static_cast<unsigned>(surface_capabilities.supportedTransforms));
+#endif
+	// The surface may only support INHERIT (for example on Android).
+	const VkCompositeAlphaFlagBitsKHR alphaModes[] = {
+		VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+		VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+		VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+		VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR
+	};
+	for (auto mode : alphaModes)
+	{
+		if (surface_capabilities.supportedCompositeAlpha & mode)
+		{
+			create_info.compositeAlpha = mode;
+			break;
+		}
+	}
+	if (!create_info.compositeAlpha)
+	{
+		fprintf(stderr, "No supported swapchain composite alpha mode\n");
+		return;
+	}
+#if defined(__ANDROID__)
+	__android_log_print(ANDROID_LOG_INFO, "ETERVALE_VK_ROTATION", "compositeAlpha=%u; supportedCompositeAlpha=%u",
+		static_cast<unsigned>(create_info.compositeAlpha), static_cast<unsigned>(surface_capabilities.supportedCompositeAlpha));
+#endif
 	create_info.presentMode = selectedPresentMode;
 	create_info.clipped = VK_TRUE;
 	//create_info.pNext = &scalingCreateInfo;
@@ -2347,9 +2620,9 @@ void MGVK_RecreateSwapChain(
 		{
 			for (size_t i = 0; i < device->swapchainCount; i++)
 			{
-				// TODO: Should we wait for fences here or is vkDeviceWaitIdle enough?
-
+				// The device is idle; the old command buffers will never be submitted again.
 				auto& frame = device->frames[i];
+				vkFreeCommandBuffers(device->device, device->cmdPool, 1, &frame.commandBuffer);
 				vkDestroySemaphore(device->device, frame.imageAcquiredSemaphore, nullptr);
 				vkDestroyFence(device->device, frame.completedFence, nullptr);
 				if (frame.uniforms)
@@ -2368,9 +2641,10 @@ void MGVK_RecreateSwapChain(
 		// safe to free all the descriptors and let them recreate
 		// on the next draw.  This removes all flicker caused by
 		// bad descriptor caches.
-		MGVK_ProcessDescriptorCaches(device, 0);
+		MGVK_ProcessDescriptorCaches(device, device->frame, true);
 
 		device->swapchainCount = swapchainCount;
+		device->frameIndex = device->frame % device->swapchainCount;
 		device->freeFrames = device->swapchainCount + 1;
 
 		VkCommandBufferAllocateInfo comBufferInfo =
@@ -2587,7 +2861,7 @@ mgbyte MGG_GraphicsDevice_ResizeSwapchain(
 			std::lock_guard lock(device->queueMutex);
 			vkQueueSubmit(device->queue, 1, &submitInfo, fence);
 		}
-		vkWaitForFences(device->device, 1, &fence, VK_TRUE, UINT64_MAX);
+		MGVK_WaitForCompletedFence(device, fence, "resize partial frame");
 		vkDestroyFence(device->device, fence, nullptr);
 		frame.is_recording = false;
 	}
@@ -2607,7 +2881,7 @@ mgbyte MGG_GraphicsDevice_ResizeSwapchain(
 }
 
 
-static void MGVK_ProcessDescriptorCaches(MGG_GraphicsDevice* device, FrameCounter currentFrame)
+static void MGVK_ProcessDescriptorCaches(MGG_GraphicsDevice* device, FrameCounter currentFrame, bool all)
 {
 	// Here we go thru the shaders and move any
 	// descriptors that haven't been used in a few
@@ -2627,7 +2901,7 @@ static void MGVK_ProcessDescriptorCaches(MGG_GraphicsDevice* device, FrameCounte
 		for (; pair != usedSets.end();)
 		{
 			auto diff = currentFrame - pair->second->frame;
-			if (diff < device->freeFrames)
+			if (!all && diff < device->freeFrames)
 			{
 				pair++;
 				continue;
@@ -2664,8 +2938,7 @@ void MGVK_TryAcquireSwap(MGG_GraphicsDevice* device, MGVK_Frame& frame)
 	// Block and wait for the frame to be done rendering.
 	if (frame.is_rendering)
 	{
-		res = vkWaitForFences(device->device, 1, &frame.completedFence, VK_TRUE, UINT64_MAX);
-		VK_CHECK_RESULT(res);
+		MGVK_WaitForCompletedFence(device, frame.completedFence, "reuse frame slot");
 		frame.is_rendering = false;
 		MGVK_CollectFrameCapture(device, device->frameIndex);
 	}
@@ -2693,6 +2966,8 @@ void MGVK_PrepareFrame(MGG_GraphicsDevice* device)
 	MGVK_TryAcquireSwap(device, frame);
 
 	// Cleanup resources from the last time this frame was rendered.
+	// Only this boundary (after the slot fence) or final device teardown retires shaders.
+	MGVK_RetireShaders(device, false);
 	MGVK_ProcessDescriptorCaches(device, device->frame);
 	MGVK_RecycleDiscardedBuffers(device);
 
@@ -2829,20 +3104,26 @@ static void MGVK_DestroyTargetSets(MGG_GraphicsDevice* device, std::function<boo
 			itr++;
 		else
 		{
+			// Framebuffer attachments must outlive their framebuffer.
+			vkDestroyFramebuffer(device->device, itr->second->framebuffer, nullptr);
             for (int i = 0; i < MGVK_NUM_TARGETS; ++i) {
                 auto& view = itr->second->arraySlicesViews[i];
                 if (view.has_value()) {
                     vkDestroyImageView(device->device, view.value(), nullptr);
                 }
             }
-			vkDestroyFramebuffer(device->device, itr->second->framebuffer, nullptr);
 			vkDestroyRenderPass(device->device, itr->second->renderPass, nullptr);
+			if (device->pipelineState.targets == itr->second)
+			{
+				device->pipelineState.targets = nullptr;
+				device->renderTargetDirty = true;
+				device->pipelineStateDirty = true;
+			}
 			delete itr->second;
 			cache.erase(itr++);
 		}
 	}
 
-	device->pipelineState.targets = nullptr;
 }
 
 size_t MGVK_PipelineKeyHash::operator()(const MGVK_PipelineKey& key) const
@@ -2925,6 +3206,8 @@ static void MGVK_DestroyPipelines(MGG_GraphicsDevice* device, std::function<bool
 			itr++;
 		else
 		{
+			if (device->lastGraphicsPipeline == itr->second.cache)
+				device->lastGraphicsPipeline = VK_NULL_HANDLE;
 			vkDestroyPipeline(device->device, itr->second.cache, nullptr);
 			pipelines.erase(itr++);
 		}
@@ -2949,14 +3232,40 @@ static void MGVK_DestroyFrameResources(MGG_GraphicsDevice* device, FrameCounter 
 			delete buffer;
 		}
 
-		while (!device->destroyTextures.empty())
+		// Etervale fork: check the retirement request and every kind of last use, not just sampling.
+		// Visit each queued texture once; an outstanding binding must not block other retirements.
+		const auto pendingTextureCount = device->destroyTextures.size();
+		for (size_t n = 0; n < pendingTextureCount; ++n)
 		{
 			auto texture = device->destroyTextures.front();
-			auto diff = currentFrame - texture->frame;
-			if (!free_all && diff < device->freeFrames)
-				break;
-
 			device->destroyTextures.pop();
+			bool bound = false;
+			for (int stage = 0; stage < (int)MGShaderStage::Count && !bound; ++stage)
+			{
+				for (int slot = 0; slot < MAX_TEXTURE_SLOTS; ++slot)
+					if (device->textures[stage][slot] == texture)
+						bound = true;
+				for (int slot = 0; slot < MGVK_MAX_UAV_SLOTS; ++slot)
+					if (device->uavs[stage][slot].texture == texture)
+						bound = true;
+			}
+			for (size_t slot = 0; slot < MGVK_NUM_TARGETS; ++slot)
+				if (device->targets.targets[slot] == texture)
+					bound = true;
+			if (bound)
+				texture->retireFrame = device->frame;
+
+			const auto recent = [device](FrameCounter frame)
+			{
+				return device->frame - frame < device->freeFrames;
+			};
+			if (bound || (!free_all && (recent(texture->retireFrame) || recent(texture->frame) ||
+				(texture->writeFrame != (FrameCounter)-1 && recent(texture->writeFrame)) ||
+				(texture->uploadFrame != (FrameCounter)-1 && recent(texture->uploadFrame)))))
+			{
+				device->destroyTextures.push(texture);
+				continue;
+			}
 
 			{
 				std::lock_guard lock(device->transferMutex);
@@ -2987,6 +3296,17 @@ static void MGVK_DestroyFrameResources(MGG_GraphicsDevice* device, FrameCounter 
 						s->set.targets[2] == texture ||
 						s->set.targets[3] == texture;
 				});
+			}
+
+			// The private depth attachment belongs to the parent render target and is not independently exposed.
+			// Retire it only after all framebuffers that refer to the parent have been destroyed.
+			if (texture->depthTexture)
+			{
+				auto depth = texture->depthTexture;
+				vkDestroyImageView(device->device, depth->target_view, nullptr);
+				vmaDestroyImage(device->allocator, depth->image, depth->allocation);
+				delete depth;
+				texture->depthTexture = nullptr;
 			}
 
 			if (texture->target_view != VK_NULL_HANDLE)
@@ -3073,10 +3393,33 @@ static void MGVK_DestroyFrameResources(MGG_GraphicsDevice* device, FrameCounter 
 			delete state;
 		}
 
-		while (device->destroySamplers.size() > 0)
+		// Etervale fork: a sampler may still be referenced by a bound slot or a submitted descriptor set.
+		// Examine each queued sampler once; a still-bound one must not block unrelated retirements.
+		const auto pendingSamplerCount = device->destroySamplers.size();
+		for (size_t n = 0; n < pendingSamplerCount; ++n)
 		{
 			auto sampler = device->destroySamplers.front();
 			device->destroySamplers.pop();
+			bool bound = false;
+			for (int stage = 0; stage < (int)MGShaderStage::Count && !bound; ++stage)
+				for (int slot = 0; slot < MAX_TEXTURE_SLOTS; ++slot)
+					if (device->samplers[stage][slot] == sampler)
+					{
+						bound = true;
+						break;
+					}
+
+			if (bound)
+				sampler->retireFrame = device->frame;
+
+			// A swapchain-only teardown does not release a still-bound sampler. Device teardown clears the slots.
+			const auto age = device->frame - sampler->retireFrame;
+			if (bound || (!free_all && age < device->freeFrames))
+			{
+				device->destroySamplers.push(sampler);
+				continue;
+			}
+
 			vkDestroySampler(device->device, sampler->sampler, nullptr);
 			delete sampler;
 		}
@@ -3085,6 +3428,7 @@ static void MGVK_DestroyFrameResources(MGG_GraphicsDevice* device, FrameCounter 
 
 void MGVK_WaitPendingTransfers(MGG_GraphicsDevice* device, MGG_Texture* texture)
 {
+	MGVK_TransferDiagnosticScope diagnostic("WaitPendingTransfers");
 	auto& transfers = device->pendingTransfers;
 
 	for (size_t i = 0; i < transfers.size();)
@@ -3096,7 +3440,7 @@ void MGVK_WaitPendingTransfers(MGG_GraphicsDevice* device, MGG_Texture* texture)
 			continue;
 		}
 
-		vkWaitForFences(device->device, 1, &pending.done, VK_TRUE, UINT64_MAX);
+		MGVK_WaitForCompletedFence(device, pending.done, "wait pending transfer");
 
 		vkFreeCommandBuffers(device->device, device->transferPool, 1, &pending.cmd);
 		vmaDestroyBuffer(device->allocator, pending.staging.buffer, pending.staging.allocation);
@@ -3110,17 +3454,20 @@ void MGVK_WaitPendingTransfers(MGG_GraphicsDevice* device, MGG_Texture* texture)
 
 void MGVK_CleanupPendingTransfers(MGG_GraphicsDevice* device)
 {
+	MGVK_TransferDiagnosticScope diagnostic("CleanupPendingTransfers");
 	bool reset = false;
 	auto& transfers = device->pendingTransfers;
 	for (size_t i = 0; i < transfers.size(); )
 	{
 		auto& pending = transfers[i];
-		VkResult res = vkGetFenceStatus(device->device, pending.done);
-		if (res == VK_NOT_READY)
+		// Poll with zero timeout: this is non-blocking and only SUCCESS permits retirement.
+		VkResult res = vkWaitForFences(device->device, 1, &pending.done, VK_TRUE, 0);
+		if (res == VK_TIMEOUT)
 		{
 			i++;
 			continue;
 		}
+		MGVK_RequireTransferSuccess(res, "poll pending transfer");
 
 		vkFreeCommandBuffers(device->device, device->transferPool, 1, &pending.cmd);
 		vmaDestroyBuffer(device->allocator, pending.staging.buffer, pending.staging.allocation);
@@ -3133,7 +3480,7 @@ void MGVK_CleanupPendingTransfers(MGG_GraphicsDevice* device)
 
 	if (reset && transfers.size() == 0)
 	{
-		vkResetCommandPool(device->device, device->transferPool, VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT);
+		MGVK_RequireTransferSuccess(vkResetCommandPool(device->device, device->transferPool, VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT), "reset transfer pool");
 	}
 }
 
@@ -3176,6 +3523,7 @@ void MGG_GraphicsDevice_Present(MGG_GraphicsDevice* device, mgint currentFrame, 
 		submitInfo.signalSemaphoreCount = 1;
 		submitInfo.pSignalSemaphores = &swap.renderCompleteSemaphore;
 		res = vkQueueSubmit(device->queue, 1, &submitInfo, frame.completedFence);
+		VK_CHECK_RESULT(res);
 
 		VkPresentInfoKHR presentInfo = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
 		presentInfo.waitSemaphoreCount = 1;
@@ -3184,13 +3532,11 @@ void MGG_GraphicsDevice_Present(MGG_GraphicsDevice* device, mgint currentFrame, 
 		presentInfo.pSwapchains = &device->swapchain;
 		presentInfo.pImageIndices = &frame.image_index;
 		res = vkQueuePresentKHR(device->queue, &presentInfo);
-#if defined(__ANDROID__)
-		// ETERVALE_ANDROID_MALI_SERIAL_PRESENT_V9: DIAGNOSTICO, nao fix definitivo.
-		// Espera a fila Vulkan acabar cada frame para testar se o driver Mali
-		// falha com trabalho de varios frames simultaneamente em voo.
-		// Esta operacao tem custo alto; ao reverter recupera-se o desempenho.
-		VkResult androidSerialIdle = vkQueueWaitIdle(device->queue);
-		VK_CHECK_RESULT(androidSerialIdle);
+#if defined(__ANDROID__) && !defined(ETERVALE_VK_VALIDATION)
+		// ETERVALE_ANDROID_RENDER_FENCE_PRESENT: serialize graphics, not the presentation queue.
+		// The submit fence covers rendering, but not consumption of the present semaphore.
+		// Present semaphores remain owned by swapchain images; reuse follows image acquisition.
+		MGVK_WaitForCompletedFence(device, frame.completedFence, "post-present baseline fence");
 #endif
 	}
 
@@ -3200,6 +3546,10 @@ void MGG_GraphicsDevice_Present(MGG_GraphicsDevice* device, mgint currentFrame, 
 		std::lock_guard lock(device->transferMutex);
 		MGVK_CleanupPendingTransfers(device);
 	}
+
+	// Record the submitted slot before recreation can invalidate its reference.
+	frame.image_index = -1;
+	frame.is_rendering = true;
 
 	if (res == VK_ERROR_OUT_OF_DATE_KHR)
 	{
@@ -3221,9 +3571,6 @@ void MGG_GraphicsDevice_Present(MGG_GraphicsDevice* device, mgint currentFrame, 
 	{
 		VK_CHECK_RESULT(res);
 	}
-
-	frame.image_index = -1;
-	frame.is_rendering = true;
 
 	// Etervale fork: buffers discarded this frame wait in the pending list until no frame in flight can read them
 	// (MGVK_RecycleDiscardedBuffers). Upstream moved them to the free list one Present later, while with three or more
@@ -4610,9 +4957,12 @@ static void MGVK_UpdatePipeline(MGG_GraphicsDevice* device, VkCommandBuffer comm
 			MGVK_UpdateDescriptors(device, currentFrame, program->pixel, &device->descriptorSets[setCount++], dynamicOffset);
 		}
 
-		// Bind the new descriptor sets.
-		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-			program->layout, setOffset, setCount, device->descriptorSets, offsetCount, device->dynamicOffsets);
+		// Shaders without resource bindings need no descriptor-set bind. Vulkan requires a nonzero count.
+		if (setCount > 0)
+		{
+			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+				program->layout, setOffset, setCount, device->descriptorSets, offsetCount, device->dynamicOffsets);
+		}
 
 		// Clear all the dirty flags.
 		device->uniformsDirty = 0;
@@ -5067,7 +5417,7 @@ void MGG_GraphicsDevice_GetBackBufferData(MGG_GraphicsDevice* device, mgint x, m
 		std::lock_guard lock(device->queueMutex);
 		vkQueueSubmit(device->queue, 1, &flushSubmitInfo, flushFence);
 	}
-	vkWaitForFences(device->device, 1, &flushFence, VK_TRUE, UINT64_MAX);
+	MGVK_WaitForCompletedFence(device, flushFence, "backbuffer readback");
 	vkDestroyFence(device->device, flushFence, nullptr);
 
 	auto srcImage = device->swapchains[frame.image_index].texture->image;
@@ -5646,6 +5996,7 @@ void MGG_SamplerState_Destroy(MGG_GraphicsDevice* device, MGG_SamplerState* stat
 	if (!state)
 		return;
 
+	state->retireFrame = device->frame;
 	device->destroySamplers.push(state);
 }
 
@@ -6285,12 +6636,12 @@ void MGG_Texture_Destroy(MGG_GraphicsDevice* device, MGG_Texture* texture)
 	if (!texture)
 		return;
 
-	if (texture->depthTexture)
-		MGG_Texture_Destroy(device, texture->depthTexture);
-
 	// If this is an externally owned texture (like an external swapchain or image wrapped in a RenderTarget2D).
 	if (texture->isExternal && texture->allocation == VK_NULL_HANDLE)
 	{
+		// Keep the existing external-wrapper contract; owned targets retire their depth with the parent.
+		if (texture->depthTexture)
+			MGG_Texture_Destroy(device, texture->depthTexture);
 		// Wait for the device to be idle to safely destroy views before the external caller destroys the underlying VkImage.
 		vkDeviceWaitIdle(device->device);
 
@@ -6339,7 +6690,8 @@ void MGG_Texture_Destroy(MGG_GraphicsDevice* device, MGG_Texture* texture)
 		return;
 	}
 
-	// Queue the texture for later destruction.
+	// Queue the texture for later destruction; a recent upload or write may not have been submitted yet.
+	texture->retireFrame = device->frame;
 	device->destroyTextures.push(texture);
 }
 
@@ -6447,10 +6799,11 @@ void MGG_Texture_SetData(MGG_GraphicsDevice* device, MGG_Texture* texture, mgint
 		VkFenceCreateInfo fenceCreateInfo = {};
 		fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 		fenceCreateInfo.flags = 0;
-		vkCreateFence(device->device, &fenceCreateInfo, nullptr, &transfer.done);
+		MGVK_TransferDiagnosticScope diagnostic("TextureSetDataTransfer");
+		MGVK_RequireTransferSuccess(vkCreateFence(device->device, &fenceCreateInfo, nullptr, &transfer.done), "create texture upload fence");
 		VK_SET_OBJECT_NAME(device->device, transfer.done, VK_OBJECT_TYPE_FENCE, "MGVK_Transfer.done");
 
-		vkEndCommandBuffer(cmd);
+		MGVK_RequireTransferSuccess(vkEndCommandBuffer(cmd), "end texture upload");
 
 		std::lock_guard lock2(device->queueMutex);
 		VkSubmitInfo submit = {};
@@ -6459,7 +6812,7 @@ void MGG_Texture_SetData(MGG_GraphicsDevice* device, MGG_Texture* texture, mgint
 		submit.commandBufferCount = 1;
 		submit.pCommandBuffers = &cmd;
 		submit.signalSemaphoreCount = 0;
-		vkQueueSubmit(device->queue, 1, &submit, transfer.done);
+		MGVK_RequireTransferSuccess(vkQueueSubmit(device->queue, 1, &submit, transfer.done), "submit texture upload");
 
 		device->pendingTransfers.push_back(transfer);
 	}
@@ -6988,23 +7341,38 @@ MGG_Shader* MGG_Shader_Create(MGG_GraphicsDevice* device, MGShaderStage stage, m
 	return shader;
 }
 
-void MGG_Shader_Destroy(MGG_GraphicsDevice* device, MGG_Shader* shader)
+// Only called after the retirement interval, or after command-buffer destruction at device shutdown.
+static void MGVK_DestroyShaderNow(MGG_GraphicsDevice* device, MGG_Shader* shader)
 {
-	assert(device != nullptr);
-	assert(shader != nullptr);
+	// Destroy the dependent graphics pipelines before their programs/layouts and the shader's descriptors.
+	for (auto it = device->shader_programs.begin(); it != device->shader_programs.end();)
+	{
+		auto program = it->second;
+		if (program->vertex != shader && program->pixel != shader)
+		{
+			++it;
+			continue;
+		}
+		MGVK_DestroyPipelines(device, [program](const MGVK_PipelineState& state) { return state.program == program; });
+		if (device->pipelineState.program == program)
+		{
+			device->pipelineState.program = nullptr;
+			device->shaderDirty = true;
+			device->pipelineStateDirty = true;
+			memset(device->descriptorSets, 0, sizeof(device->descriptorSets));
+			memset(device->dynamicOffsets, 0, sizeof(device->dynamicOffsets));
+		}
+		vkDestroyPipelineLayout(device->device, program->layout, nullptr);
+		delete program;
+		it = device->shader_programs.erase(it);
+	}
 
-	if (!shader)
-		return;
-
-	// Etervale fork: a compute shader's pipeline may still run in a frame in flight; effects are disposed rarely, so the
-	// device is waited once rather than the pipeline queued for later destruction.
 	if (shader->computePipeline != VK_NULL_HANDLE)
 	{
-		vkDeviceWaitIdle(device->device);
+		if (device->lastComputePipeline == shader->computePipeline)
+			device->lastComputePipeline = VK_NULL_HANDLE;
 		vkDestroyPipeline(device->device, shader->computePipeline, nullptr);
 		vkDestroyPipelineLayout(device->device, shader->computeLayout, nullptr);
-		if (device->shaders[(mgint)MGShaderStage::Compute] == shader)
-			device->shaders[(mgint)MGShaderStage::Compute] = nullptr;
 	}
 
 	delete [] shader->bufferInfo;
@@ -7026,9 +7394,10 @@ void MGG_Shader_Destroy(MGG_GraphicsDevice* device, MGG_Shader* shader)
 		delete free;
 	}
 
+	// Pool destruction releases the sets before their layout and module are destroyed.
+	if (shader->pool != VK_NULL_HANDLE)
+		vkDestroyDescriptorPool(device->device, shader->pool, nullptr);
 	vkDestroyDescriptorSetLayout(device->device, shader->setLayout, nullptr);
-
-	vkDestroyDescriptorPool(device->device, shader->pool, nullptr);
 	if (shader->poolInfo)
 	{
 		delete [] shader->poolInfo->pPoolSizes;
@@ -7039,6 +7408,59 @@ void MGG_Shader_Destroy(MGG_GraphicsDevice* device, MGG_Shader* shader)
 
 	mg_remove(device->all_shaders, shader);
 	delete shader;
+}
+
+void MGG_Shader_Destroy(MGG_GraphicsDevice* device, MGG_Shader* shader)
+{
+	assert(device != nullptr);
+	assert(shader != nullptr);
+	if (!shader)
+		return;
+
+	// Do not invalidate a recorded command buffer or mutate the shader/program caches here.
+	std::lock_guard lock(device->shaderRetirementMutex);
+	if (!shader->retirementRequested)
+	{
+		device->retiredShaders.push(shader);
+		shader->retirementRequested = true;
+	}
+}
+
+static void MGVK_RetireShaders(MGG_GraphicsDevice* device, bool shutdown)
+{
+	std::lock_guard lock(device->shaderRetirementMutex);
+	if (shutdown)
+	{
+		// All command buffers are gone. Release even shaders that were never explicitly disposed.
+		memset(device->shaders, 0, sizeof(device->shaders));
+		while (!device->retiredShaders.empty())
+			device->retiredShaders.pop();
+		while (!device->all_shaders.empty())
+			MGVK_DestroyShaderNow(device, device->all_shaders.back());
+		return;
+	}
+
+	const auto pending = device->retiredShaders.size();
+	for (size_t n = 0; n < pending; ++n)
+	{
+		auto shader = device->retiredShaders.front();
+		device->retiredShaders.pop();
+		bool bound = false;
+		for (int stage = 0; stage < (int)MGShaderStage::Count; ++stage)
+			if (device->shaders[stage] == shader)
+				bound = true;
+		if (!shader->retirementStarted || bound)
+		{
+			shader->retirementStarted = true;
+			shader->retireFrame = device->frame;
+		}
+		if (bound || device->frame - shader->retireFrame < device->freeFrames)
+		{
+			device->retiredShaders.push(shader);
+			continue;
+		}
+		MGVK_DestroyShaderNow(device, shader);
+	}
 }
 
 MGG_OcclusionQuery* MGG_OcclusionQuery_Create(MGG_GraphicsDevice* device)
@@ -7122,7 +7544,7 @@ void MGG_OcclusionQuery_End(MGG_GraphicsDevice* device, MGG_OcclusionQuery* quer
 		VK_CHECK_RESULT(vkQueueSubmit(device->queue, 1, &submitInfo, fence));
 	}
 
-    VK_CHECK_RESULT(vkWaitForFences(device->device, 1, &fence, VK_TRUE, UINT64_MAX));
+    MGVK_WaitForCompletedFence(device, fence, "occlusion query flush");
     vkDestroyFence(device->device, fence, nullptr);
 
 	MGVK_BeginCommandBuffer(frame.commandBuffer);
@@ -7400,9 +7822,16 @@ MG_EXPORT mgbool MGG_TimestampPool_Reset(MGG_GraphicsDevice* device, void* pool,
 {
 	assert(device != nullptr);
 	auto& frame = device->frames[device->frameIndex];
-	// vkCmdResetQueryPool is not allowed inside a render pass, and ending one here would change its load/store.
-	if (!frame.is_recording || device->inRenderPass)
+	// vkCmdResetQueryPool is forbidden inside a render pass. A pending target switch
+	// already requires the old pass to end (MGVK_UpdateRenderPass); close it now.
+	if (!frame.is_recording)
 		return false;
+	if (device->inRenderPass)
+	{
+		if (!device->renderTargetDirty)
+			return false;
+		MGVK_EndRenderPass(device, frame.commandBuffer);
+	}
 	vkCmdResetQueryPool(frame.commandBuffer, (VkQueryPool)pool, first, count);
 	return true;
 }
@@ -7865,6 +8294,7 @@ static void MGVK_RecordStorageUpload(VkCommandBuffer cmd, MGG_Buffer* buffer, Vk
 //   presented waited for it (--check-compute: one 45 ms frame; none with the dedicated allocation).
 static void MGVK_UploadStorageOffThread(MGG_GraphicsDevice* device, MGG_Buffer* buffer, mgint offset, mgbyte* data, mgint dataBytes)
 {
+	MGVK_TransferDiagnosticScope diagnostic("UploadStorageOffThread");
 	VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
 	bufferInfo.size = (VkDeviceSize)dataBytes;
 	bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -7896,23 +8326,22 @@ static void MGVK_UploadStorageOffThread(MGG_GraphicsDevice* device, MGG_Buffer* 
 	VK_CHECK_RESULT(res);
 	VkCommandBufferBeginInfo beginInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
 	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-	vkBeginCommandBuffer(cmd, &beginInfo);
+	MGVK_RequireTransferSuccess(vkBeginCommandBuffer(cmd, &beginInfo), "begin worker storage upload");
 	MGVK_RecordStorageUpload(cmd, buffer, staging.buffer, offset, dataBytes);
-	vkEndCommandBuffer(cmd);
+	MGVK_RequireTransferSuccess(vkEndCommandBuffer(cmd), "end worker storage upload");
 
 	VkFenceCreateInfo fenceInfo = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
 	VkFence done;
-	vkCreateFence(device->device, &fenceInfo, nullptr, &done);
+	MGVK_RequireTransferSuccess(vkCreateFence(device->device, &fenceInfo, nullptr, &done), "create worker storage fence");
 	VK_SET_OBJECT_NAME(device->device, done, VK_OBJECT_TYPE_FENCE, "MGG_Buffer_SetStorageData.offThreadDone");
 	{
 		std::lock_guard lock(device->queueMutex);
 		VkSubmitInfo submit = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
 		submit.commandBufferCount = 1;
 		submit.pCommandBuffers = &cmd;
-		res = vkQueueSubmit(device->queue, 1, &submit, done);
-		VK_CHECK_RESULT(res);
+		MGVK_RequireTransferSuccess(vkQueueSubmit(device->queue, 1, &submit, done), "submit worker storage upload");
 	}
-	vkWaitForFences(device->device, 1, &done, VK_TRUE, UINT64_MAX);
+	MGVK_WaitForCompletedFence(device, done, "wait worker storage upload");
 
 	vkDestroyFence(device->device, done, nullptr);
 	vkDestroyCommandPool(device->device, pool, nullptr);
@@ -7953,22 +8382,23 @@ MG_EXPORT void MGG_Buffer_SetStorageData(MGG_GraphicsDevice* device, MGG_Buffer*
 	}
 
 	std::lock_guard lock(device->transferMutex);
+	MGVK_TransferDiagnosticScope diagnostic("BufferSetStorageDataTransfer");
 	MGVK_Transfer transfer;
 	transfer.owner = nullptr;
 	transfer.cmd = MGVK_BeginNewCommandBuffer(device, device->transferPool);
 	transfer.staging = staging;
 	MGVK_RecordStorageUpload(transfer.cmd, buffer, staging.buffer, offset, dataBytes);
-	vkEndCommandBuffer(transfer.cmd);
+	MGVK_RequireTransferSuccess(vkEndCommandBuffer(transfer.cmd), "end storage transfer");
 
 	VkFenceCreateInfo fenceInfo = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-	vkCreateFence(device->device, &fenceInfo, nullptr, &transfer.done);
+	MGVK_RequireTransferSuccess(vkCreateFence(device->device, &fenceInfo, nullptr, &transfer.done), "create storage transfer fence");
 	VK_SET_OBJECT_NAME(device->device, transfer.done, VK_OBJECT_TYPE_FENCE, "MGG_Buffer_SetStorageData.done");
 	{
 		std::lock_guard lock2(device->queueMutex);
 		VkSubmitInfo submit = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
 		submit.commandBufferCount = 1;
 		submit.pCommandBuffers = &transfer.cmd;
-		vkQueueSubmit(device->queue, 1, &submit, transfer.done);
+		MGVK_RequireTransferSuccess(vkQueueSubmit(device->queue, 1, &submit, transfer.done), "submit storage transfer");
 	}
 	device->pendingTransfers.push_back(transfer);
 }

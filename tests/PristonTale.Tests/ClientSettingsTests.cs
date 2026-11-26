@@ -15,6 +15,9 @@ internal static class ClientSettingsTests
         yield return ("invalid and future settings documents survive attempted saves", PreserveInvalidAsync);
         yield return ("settings write failures are observable without faulting gameplay", WriteFailureAsync);
         yield return ("frame pacing has no catch-up bursts and separates foreground limits", PacingAsync);
+        yield return ("scaled scene preserves native output and unscaled subviewports", SceneScaleAsync);
+        yield return ("optional Android depth prepass preserves required rendering paths", OptionalDepthPrepassAsync);
+        yield return ("GPU diagnostics distinguish absent samples from zero elapsed time", GpuProbeAsync);
         yield return ("a texture named with another extension is found in the subfolder its name points to", TextureExtensionAsync);
         yield return ("opening textures use only a configured Ricarten directory fallback after the source folder", TextureScopedFallbackAsync);
         yield return ("opening NPC E resolves only mm.bmp through the original TN-006 model directory", OpeningNpcTextureFallbackAsync);
@@ -279,6 +282,53 @@ internal static class ClientSettingsTests
         {
             File.Delete(path);
         }
+    }
+
+    private static Task GpuProbeAsync()
+    {
+        using var profiler = new PristonFrameProfiler();
+        profiler.BeginFrame();
+        profiler.Begin(RenderSection.SceneTotal);
+        profiler.End(RenderSection.SceneTotal);
+        profiler.FinishGpuFrame();
+        Assert.True(!profiler.GpuTimersAvailable, "GPU timers enabled without a device");
+        Assert.True(profiler.GpuSampleCount(RenderSection.SceneTotal) == 0, "CPU sample was counted as a GPU result");
+        Assert.True(profiler.GpuSampleSummary(RenderSection.SceneTotal) == "n/a", "missing GPU result was presented as zero");
+        profiler.ResetAverages();
+        Assert.True(profiler.GpuResetMissed == 0 && profiler.GpuResultsMissed == 0, "empty probe has missed results");
+        return Task.CompletedTask;
+    }
+
+    private static Task OptionalDepthPrepassAsync()
+    {
+        Assert.True(!PristonRenderer.ShouldUseDepthPrepass(true, true, false, false), "optional pass was not skipped");
+        Assert.True(PristonRenderer.ShouldUseDepthPrepass(true, false, false, false), "default rendering changed");
+        Assert.True(PristonRenderer.ShouldUseDepthPrepass(true, true, true, false), "temporal path lost its prepass");
+        Assert.True(PristonRenderer.ShouldUseDepthPrepass(true, true, false, true), "required depth pass was skipped");
+        Assert.True(!PristonRenderer.ShouldUseDepthPrepass(false, false, true, true), "unsupported prepass was enabled");
+        return Task.CompletedTask;
+    }
+
+    private static Task SceneScaleAsync()
+    {
+        var landscape = new Microsoft.Xna.Framework.Graphics.Viewport(0, 0, 2400, 1080);
+        var portrait = new Microsoft.Xna.Framework.Graphics.Viewport(0, 0, 1080, 2400);
+        var a = PristonSceneTargets.ScaleScene(landscape, 2400, 1080, 50);
+        var b = PristonSceneTargets.ScaleScene(portrait, 1080, 2400, 50);
+        Assert.True(a.Width == 1200 && a.Height == 540 && a.Viewport.Width == 1200 && a.Viewport.Height == 540,
+            "landscape scene did not scale to half resolution");
+        Assert.True(b.Width == 540 && b.Height == 1200 && b.Viewport.Width == 540 && b.Viewport.Height == 1200,
+            "portrait scene did not scale to half resolution");
+        Assert.True(landscape.Width == 2400 && landscape.Height == 1080, "caller viewport was modified");
+        var native = PristonSceneTargets.ScaleScene(landscape, 2400, 1080, 100);
+        Assert.True(native.Width == 2400 && native.Height == 1080, "native resolution changed");
+        var sub = new Microsoft.Xna.Framework.Graphics.Viewport(10, 20, 800, 600);
+        var unchanged = PristonSceneTargets.ScaleScene(sub, 2400, 1080, 50);
+        Assert.True(unchanged.Width == 2400 && unchanged.Height == 1080 && unchanged.Viewport.X == 10
+            && unchanged.Viewport.Y == 20 && unchanged.Viewport.Width == 800, "subviewport geometry changed");
+        var tiny = PristonSceneTargets.ScaleScene(new Microsoft.Xna.Framework.Graphics.Viewport(0, 0, 1, 1), 1, 1, 50);
+        Assert.True(tiny.Width == 1 && tiny.Height == 1, "scaled target became empty");
+        return Task.CompletedTask;
     }
 
     private static Task PacingAsync()

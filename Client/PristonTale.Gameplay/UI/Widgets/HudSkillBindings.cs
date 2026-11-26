@@ -15,23 +15,30 @@ public sealed class HudSkillBindings
     // The F1 to F8 keys.
     public const int ShortcutCount = 8;
     private readonly HudSkillShortcut[] _shortcuts = new HudSkillShortcut[ShortcutCount];
-    public SkillMouseUse LastSelectedSide { get; private set; } = SkillMouseUse.Left; // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34
     private uint _mobileChoiceId;
     private SkillMouseUse _mobileChoiceSide;
-    // Habilidade selecionada tocando num ícone; não requer rato + tecla F.
-    public bool PrepareMobileSkill(uint skillId)
+
+    internal bool PrepareMobileSkill(uint skillId)
     {
-        var side=CanSelect(skillId,SkillMouseUse.Right)?SkillMouseUse.Right
-            : CanSelect(skillId,SkillMouseUse.Left)?SkillMouseUse.Left:SkillMouseUse.None;
-        if(side==SkillMouseUse.None)return false;
-        _mobileChoiceId=skillId;_mobileChoiceSide=side;
-        return Select(skillId,side);
+        // A touch has no right mouse button; use the right socket when allowed, otherwise the left.
+        var side = CanSelect(skillId, SkillMouseUse.Right) ? SkillMouseUse.Right : SkillMouseUse.Left;
+        if (!Select(skillId, side))
+        {
+            return false;
+        }
+        _mobileChoiceId = skillId;
+        _mobileChoiceSide = side;
+        return true;
     }
-    public bool TryGetMobileCandidate(out uint skillId,out SkillMouseUse side)
+
+    internal bool TryAssignMobileShortcut(int index) => _mobileChoiceId != 0 && Assign(index, _mobileChoiceId, _mobileChoiceSide);
+
+    internal void ClearMobileChoice()
     {
-        skillId=_mobileChoiceId;side=_mobileChoiceSide;
-        return skillId!=0 && CanSelect(skillId,side);
+        _mobileChoiceId = 0;
+        _mobileChoiceSide = SkillMouseUse.None;
     }
+
     private KeyboardState _previousKeys;
     private MouseState _previousMouse;
     private uint _pressedSkill;
@@ -116,14 +123,17 @@ public sealed class HudSkillBindings
             RightSkillId = skillId;
         }
 
-        LastSelectedSide=side; // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34
         return true;
     }
 
-    public void Update(KeyboardState keyboard, MouseState mouse, uint hoveredSkill)
+    public void Update(KeyboardState keyboard, MouseState mouse, uint hoveredSkill, bool mobileSkillTouch = false)
     {
         if (mouse.LeftButton == ButtonState.Pressed && _previousMouse.LeftButton == ButtonState.Released)
         {
+            if (mobileSkillTouch && hoveredSkill != 0)
+            {
+                ClearMobileChoice();
+            }
             BeginPress(hoveredSkill, SkillMouseUse.Left);
         }
         else if (mouse.RightButton == ButtonState.Pressed && _previousMouse.RightButton == ButtonState.Released)
@@ -158,7 +168,8 @@ public sealed class HudSkillBindings
         var released = _pressedSide == SkillMouseUse.Left ? mouse.LeftButton == ButtonState.Released : mouse.RightButton == ButtonState.Released;
         if (_pressedSkill != 0 && released)
         {
-            if (!_boundDuringPress && hoveredSkill == _pressedSkill && !Select(_pressedSkill, _pressedSide)
+            if (!_boundDuringPress && hoveredSkill == _pressedSkill
+                && !(mobileSkillTouch && _pressedSide == SkillMouseUse.Left ? PrepareMobileSkill(_pressedSkill) : Select(_pressedSkill, _pressedSide))
                 && _choices.TryGetValue(_pressedSkill, out var refused))
             {
                 Refusal = ClientText.Format(refused.MouseUse == SkillMouseUse.Left ? "SkillWindow.OnlyLeft" : "SkillWindow.OnlyRight", refused.Name);

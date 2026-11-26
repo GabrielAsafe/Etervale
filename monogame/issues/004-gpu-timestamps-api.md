@@ -17,8 +17,9 @@ The framework was a NuGet package (issue 001).
 `GpuTimestampPool : GraphicsResource` (`Graphics/GpuTimestampPool.cs`):
 - `new GpuTimestampPool(GraphicsDevice, int count)`: a Vulkan timestamp query pool (`NotSupportedException` if the device
   cannot create one);
-- `bool Reset(int first, int count)`: resets a range in the frame's command buffer; false inside a render pass or outside
-  a frame (that frame goes untimed);
+- `bool Reset(int first, int count)`: resets a range in the frame's command buffer; false outside a recording frame or
+  inside a render pass with no pending target switch. When a target switch is pending, the previous pass ends before
+  the reset, exactly as it would at the next draw. No submission or wait is added.
 - `void Write(int index)`: `vkCmdWriteTimestamp` at the bottom of the pipe, at this point of the frame;
 - `bool TryGetNanoseconds(int index, out ulong ns)`: without waiting; false until the frame completed;
 - `Count`, `NanosecondsPerTick`; ranges are checked (`ArgumentOutOfRangeException`).

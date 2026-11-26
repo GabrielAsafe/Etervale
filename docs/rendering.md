@@ -449,7 +449,11 @@ they took the domes.
   changes, dynamic upload bytes, sun shadow update, lamp shadow cube maps redrawn (`L` in the title), shadow draw
   calls. Shown in the window title (`Ctrl+F3`).
 - `Profiler` (`PristonFrameProfiler`): CPU time per `RenderSection`; GPU time from Vulkan timestamps after
-  `EnableGpuTimers` (benchmark only), read back 4 frames later without waiting.
+  `EnableGpuTimers` (benchmark or Android gameplay diagnostic), read back 4 frames later without waiting.
+  The temporary Android probe logs cumulative GPU milliseconds/sample counts under `ETERVALE_PERF` while F9 is visible.
+  `SceneTotal` spans renderer draw, effects and composition, but excludes HUD and presentation. Absent results are `n/a`;
+  reset and read misses are counted separately. Repeated sections retain the first completed GPU query pair for the frame.
+  GPU timestamp intervals may overlap; they are not additive and can include gaps between commands.
 - `LastStreamingStats`: per `StreamingStep` count, total and worst main-thread milliseconds and bytes of the last stage
   upload (`[Stream] upload steps` log line).
 - `--benchmark-render <assets> <content> <report.json> <fieldId> <settings.json> [seconds runs hour orbit [distance
@@ -488,7 +492,8 @@ they took the domes.
   stage so their depth is bit-identical); MonoGame's `DepthStencilState.Default`/`DepthRead` and `Clear(Color)` (depth 1) reject
   everything there. Shadow maps keep the ordinary range. A 24-bit buffer with the near plane at 1 could not separate
   the original models' layered faces at range, and they flickered under the jitter.
-- Binding a render target ends the Vulkan render pass; the profiler resets timestamps only outside one, so
+- Binding a render target marks the Vulkan target state dirty; the old pass normally ends at the next draw.
+  Timestamp reset can end that already-obsolete pass early, but refuses to split a pass without a pending target switch.
   `_sceneTargets.Begin` precedes `Profiler.BeginFrame`.
 - The sky capture is refreshed before the scene target is cleared, because binding another target may discard it.
 - MonoGame clears `DiscardContents` targets on bind; scene, shadow and LDR targets are `PreserveContents` on purpose.
@@ -519,3 +524,9 @@ they took the domes.
 `cameraSceneryCollision` passes `FieldCollisionQuery` to `PristonCamera`'s follow/orbit collision sweep when
 true (the default), or disables that sweep when false. It does not modify entity collision or server movement
 authority. With it off, the world can visually occlude the camera.
+
+## Android render-fence presentation
+
+Android waits for the submitted render fence after presentation, rather than the entire graphics queue.
+Rendering remains serialized at the frame boundary; presentation itself may still be pending. Existing swapchain-image
+semaphores and frame-slot reuse rules remain unchanged. This diagnostic configuration requires device validation.

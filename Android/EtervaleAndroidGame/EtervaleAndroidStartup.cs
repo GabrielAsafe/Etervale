@@ -16,6 +16,7 @@ internal static class EtervaleAndroidStartup
             ?? activity.FilesDir?.AbsolutePath
             ?? throw new InvalidOperationException("Sem armazenamento privado Android.");
         Directory.CreateDirectory(root);
+        PristonTale.Gameplay.UI.Widgets.MobileSkillShortcutStore.Configure(root);
         Environment.SetEnvironmentVariable("ETERVALE_MOBILE_SETTINGS", Path.Combine(root, "mobile-controls.json"));
         string path = Path.Combine(root, "client-settings.json");
         if (File.Exists(path))

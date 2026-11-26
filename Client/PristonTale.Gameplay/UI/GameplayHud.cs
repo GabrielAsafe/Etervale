@@ -42,6 +42,10 @@ public sealed partial class GameplayHud : IDisposable
     internal bool MobileOverlayAllowed => !PlayerDead && !BlocksWorld && !SideWindowOpen && !_settingsOpen
         && !_systemMenu && !_questWindow.Visible && !_partyWindow.Visible && !HoldsPlayer && !MobileTyping
         && !_context.Presentation.AwaitingConfirmation;
+    internal bool MobileSkillPanel => Mobile.Enabled && _skillSlide.FullyOpen && _skillMaster == 0
+        && !PlayerDead && !ModalOpen && !_settingsOpen && !_systemMenu && !MobileTyping && !HoldsPlayer
+        && !_context.Presentation.AwaitingConfirmation;
+    private bool _mobileSkillPanelWasOpen;
     private readonly HudItemIcons _icons;
     private readonly Dictionary<Guid, string> _itemKeys = new();
     private readonly HudSkillBindings _bindings = new();
@@ -343,27 +347,6 @@ public sealed partial class GameplayHud : IDisposable
         }
     }
 
-    // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34: associação de F por pressão longa no ecrã.
-    internal void BindMobileShortcut(int index)
-    {
-        if(index<0||index>=8)return;
-        var side=_bindings.LastSelectedSide;
-        var skillId=side==PristonTale.Simulation.Skills.SkillMouseUse.Right
-            ? _bindings.RightSkillId : _bindings.LeftSkillId;
-        // A habilidade tocada em SKILLS tem prioridade, inclusive se for RIGHT-only.
-        if(_bindings.TryGetMobileCandidate(out var chosenId,out var chosenSide))
-        {
-            skillId=chosenId;side=chosenSide;
-        }
-        if(!_bindings.Assign(index,skillId,side))
-        {
-            _notice.Show($"F{index+1}: escolhe primeiro uma habilidade em SKILLS.");
-            return;
-        }
-        Mobile.SaveMobileShortcut(index,skillId,side);
-        _notice.Show($"F{index+1}: habilidade associada.");
-    }
-
     public void OpenNpc(ulong entityId) => _npc.Request(entityId);
 
     // A ground item picked up with the inventory open comes to its cursor (HudInventoryController.ExpectPickup).
@@ -539,10 +522,10 @@ public sealed partial class GameplayHud : IDisposable
         {
             _syncedSkills = state.Skills;
             _bindings.SyncLearned(SkillClasses.Get(_class).Skills, state.Skills);
-            // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34: restaurar só habilidades aprendidas e válidas.
-            for(int i=0;i<8;i++)
-                if(Mobile.TryGetMobileShortcut(i,out var id,out var side))
-                    _bindings.Assign(i,id,side);
+            if (Mobile.Enabled)
+            {
+                MobileSkillShortcutStore.Current?.Restore($"{_class}:{CharacterName}", _bindings);
+            }
         }
 
         if (_context.Presentation.AwaitingConfirmation)
@@ -646,17 +629,32 @@ public sealed partial class GameplayHud : IDisposable
         var skillOrigin = PanelOrigin(layout, _skillSlide);
         _skills.RefreshRanks(_state);
         var hoveredSkill = _skillSlide.FullyOpen && _skillMaster == 0 ? _skills.HoveredSkill(skillOrigin, pointer) : 0;
-        _bindings.Update(typing ? default : keyboard, mouse, hoveredSkill);
-        // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34: toque num ícone SKILLS prepara habilidade para pressionar F.
-        // Funciona também em habilidades que só podem usar o botão direito.
-        if(OperatingSystem.IsAndroid() && _skillSlide.FullyOpen && hoveredSkill!=0
-            && mouse.LeftButton==ButtonState.Released && _previousMouse.LeftButton==ButtonState.Pressed
-            && _bindings.PrepareMobileSkill(hoveredSkill))
-            _notice.Show("Habilidade pronta: mantém F1-F8 premido para associar.");
+        var mobileSkillPanel = MobileSkillPanel && !typing;
+        if (mobileSkillPanel != _mobileSkillPanelWasOpen)
+        {
+            _bindings.ClearMobileChoice();
+            _mobileSkillPanelWasOpen = mobileSkillPanel;
+        }
+        _bindings.Update(typing ? default : keyboard, mouse, hoveredSkill, mobileSkillTouch: mobileSkillPanel);
+        if (mobileSkillPanel && Mobile.SkillShortcutRequested >= 0)
+        {
+            if (_bindings.TryAssignMobileShortcut(Mobile.SkillShortcutRequested))
+            {
+                _ = MobileSkillShortcutStore.Current?.SaveAsync($"{_class}:{CharacterName}", _bindings);
+                _notice.Show($"F{Mobile.SkillShortcutRequested + 1}: habilidade associada.");
+            }
+            else
+            {
+                _notice.Show("Escolhe primeiro uma habilidade aprendida.");
+            }
+        }
         PointerCaptured = clickTaken || Captures(layout, pointer, design) || _chat.Window.Contains(layout, pointer, SideWindowOpen) || _inventory.Dragging != Guid.Empty || _warehouse.Dragging != Guid.Empty;
         _inventory.PickupLocked = PlayerActing || storedCarried;
         _inventory.ActionStarts = PlayerActionStarts;
-        _inventory.Update(state, layout, _inventorySlide.FullyOpen && !_settingsOpen && !ModalOpen, keyboard, mouse);
+        var inventoryOrigin = Mobile.Enabled
+            ? _inventorySlide.Visible ? PanelOrigin(layout, _inventorySlide) : Mobile.CentralHudOrigin(layout)
+            : HudInventoryLayout.Origin(layout);
+        _inventory.Update(state, layout, _inventorySlide.FullyOpen && !_settingsOpen && !ModalOpen, keyboard, mouse, inventoryOrigin);
         _previousKeyboard = keyboard;
         _previousMouse = mouse;
     }
@@ -782,6 +780,15 @@ public sealed partial class GameplayHud : IDisposable
                 _hoveredButton, pressed && _hoveredButton is not null, _hoveredToggle));
             _inventoryPanel.DrawBelt(_painter, HudInventoryLayout.Origin(layout), _state, _inventory, _icons);
             _skillHud.DrawSockets(_painter, layout.BottomOffset, _bindings.LeftSkillId, _bindings.RightSkillId, Cooldowns, SkillClockMs);
+        }
+        else if ((MobileOverlayAllowed && Mobile.CentralHudVisible) || (_inventorySlide.Visible && !ModalOpen && !_settingsOpen && !PlayerDead))
+        {
+            // With the inventory open, use its existing belt coordinates so pickup and placement agree with the drawing.
+            var origin = _inventorySlide.Visible ? PanelOrigin(layout, _inventorySlide) : Mobile.CentralHudOrigin(layout);
+            _bar.DrawMobileCentral(_painter, origin, _state, new HudBarView(World.TimeOfDay, World.Running, _mapVisible, left, RightAttackEnabled,
+                null, false, null));
+            _inventoryPanel.DrawBelt(_painter, origin, _state, _inventory, _icons);
+            _skillHud.DrawSockets(_painter, origin.Y, _bindings.LeftSkillId, _bindings.RightSkillId, Cooldowns, SkillClockMs, origin.X);
         }
         if (Statuses is not null && SelfId != 0)
         {
@@ -931,16 +938,19 @@ public sealed partial class GameplayHud : IDisposable
         _restart.Draw(_painter, layout, pointer, RestartOffer?.FieldOpen == true, InCastleField);
         _painter.Flush();
         _notice.Draw(_painter, layout);
-        Mobile.Draw(_painter, layout, MobileOverlayAllowed, MobileBackAllowed, _state); // ETERVALE_MOBILE_HUD_EDITOR_V33
+        Mobile.Draw(_painter, layout, MobileOverlayAllowed, MobileBackAllowed, _state, skillPanel: MobileSkillPanel); // ETERVALE_MOBILE_HUD_EDITOR_V33
         _painter.End();
         DrawBellatraShow();
     }
 
     private HudLayout Layout() => HudLayout.Of(_context.GraphicsDevice.Viewport);
 
-    private static Point PanelOrigin(HudLayout layout, HudSlide slide) => HudInventoryLayout.Origin(layout, slide.Offset);
+    private Point PanelOrigin(HudLayout layout, HudSlide slide) =>
+        Mobile.Enabled
+            ? HudInventoryLayout.CenteredPanelOrigin(layout, slide.Offset)
+            : HudInventoryLayout.Origin(layout, slide.Offset);
 
-    private static bool WindowContains(HudLayout layout, HudSlide slide, Point pointer) =>
+    private bool WindowContains(HudLayout layout, HudSlide slide, Point pointer) =>
         slide.Visible && HudInventoryLayout.Window(PanelOrigin(layout, slide)).Contains(pointer);
 
     public void Dispose()

@@ -67,6 +67,14 @@ rendering internals, skill presentation and VFX data have their own documents (s
    creates the single `GameServerConnection` (not connected yet), the `ScreenContext` and the first screen,
    `OpeningScreen`.
 
+On Android, the launcher installs a platform log sink before the engine starts. `ETERVALE_BOOT` records elapsed
+monotonic milliseconds from managed Activity entry to bootstrap stages, the first completed `EndDraw`, first login
+form draw, and entry into gameplay. The login draw timestamp includes any time spent watching or skipping the intro;
+it is not a hardware display timestamp. `ETERVALE_PERF` records a sample every three seconds while the metrics
+panel is visible, using the most recent 30 frames and the scene, HUD and renderer CPU timings (which may include
+GPU-driver waits). Capture both tags with `adb logcat -v threadtime -s ETERVALE_BOOT:I ETERVALE_PERF:I`.
+The desktop console logger and rendering settings are unchanged.
+
 ### Asset discovery
 
 - `Game1.ResolveAssetRoot` walks up from `AppContext.BaseDirectory` and returns the first ancestor's `assets/`
@@ -95,10 +103,16 @@ OpeningScreen --login ok--> CharacterSelectScreen --enter world ok--> GameplaySc
 - A screen requests a transition with `Context.RequestScreen(next)`. `GameClient` stores it as pending and swaps after
   the current `Update` returns: `Dispose` old, then `Enter` new. Never swap from `Draw`.
 - `OpeningScreen`: cinematic (`StartImage/Opening/Map/stage.smd` and its camera path); any key or the end of the
-  cinematic reveals the login form. `OpeningLoginController` starts `IGameBackend.LoginAsync` and polls the task each
-  frame. The server accepts one login per connection, so when `IGameBackend.RequiresNewConnection` is set (a login
+  cinematic reveals the login form. On Android, a tap anywhere in the cinematic also reveals login on release; an
+  on-screen hint explains this. If login is revealed while a finger is down, input waits for its release.
+  `OpeningLoginController` starts `IGameBackend.LoginAsync` and polls the task each frame. The server accepts one
+  login per connection, so when `IGameBackend.RequiresNewConnection` is set (a login
   succeeded or the connection closed) the controller first calls `ScreenContext.RenewBackend`: `GameClient` installs a
   new `GameServerConnection` and disposes the old one off the game thread.
+  On Android, `LoginLayout` uses a compact form in the top 45% of the drawable, leaving room for a docked IME below.
+  Drawing and hit testing use the same layout; opening or closing the keyboard does not move the fields. The Android
+  IME is requested through SDL and remains controlled by the system, including its size and floating or split modes.
+  Starting authentication or leaving login requests that the IME close. Other platforms retain the classic login panel.
 - `CharacterSelectScreen`: sub-states `CharacterSelect`, `RaceSelect`, `JobSelect`, `FaceSelect`, `Name`. The roster
   shows each character in its armour, empty-handed; the hovered one's box lists name, level, tribe and class, with its
   clan on a line above them for a character in one (the list's `ClanName`). `CharacterSelectCamera` dollies along the original's rail (300 to
@@ -398,7 +412,7 @@ destination. Renderer side of stage publication: [rendering.md](rendering.md).
 | `F1`-`F8` | `HudSkillBindings` | Select a skill shortcut; while pressing a skill in the tree, bind it ([skills.md](skills.md)) |
 | `Enter`, `Page Up`/`Page Down`, `Up`/`Down` | `HudChat.Update` | Open the chat input or send its line, scroll the chat, recall commands; while typing, HUD, binding, debug and motion keys and the `A` labels are suppressed |
 | `Esc` | `Game1` | Close the chat window first, then HUD panels, else quit |
-| `F9` | `Game1.Update` | Show or hide the diagnostics overlay (frame rate and timing, the screen's status; `GameClient.Diagnostics`) |
+| `F9` or Android `MENU` → `METRICAS` | `GameClient.ToggleDiagnostics` | Show or hide the same diagnostics overlay (frame rate and timing, the screen's status; `GameClient.Diagnostics`); on Android the text is centred and scaled down when needed to fit the viewport |
 | `Ctrl+F3` / `Ctrl+F5` / `Ctrl+F10` | `GameplayScreen.UpdateDebugKeys` | Add the render stats to the F9 diagnostics / toggle shadows / cycle `PristonDebugView` |
 | `Ctrl+1`..`Ctrl+7` | `GameplayScreen.UpdateMotionKeys` | Force Stand, Walk, Run, Attack, Damage, Dead, Skill on the local avatar |
 | Arrow keys (action field) | `GameScene.UpdateActionKeys` | Walk along x (left, right) and z (up, down), diagonals included; left or right pressed again within 500 ms of letting it go dashes (runs) until released or turned; letting go stops the walk and the attack; walking into another player (within 16 of the next step and of its height, nearer there than before; `RemoteEntityManager.FindPlayerBumped`) stops there and makes it the target, its trade, party and friend buttons shown once a bump; walking away always goes |
@@ -422,6 +436,26 @@ come from the window's text input (`Game1` to `GameClient.TypeCharacter` to `Scr
 `TextInputField` on the login and name forms and the chat input line.
 
 ## HUD and windows
+
+On Android the original central HUD art, gauges, clock, skill sockets and potion belt are drawn without the classic side
+menu. The central block can be moved as a unit in the mobile HUD editor. While editing, a 16-unit logical grid is shown;
+dragged controls snap their centers to the nearest available grid intersection inside the 48-unit horizontal and
+24-unit vertical safety margins. If the control cannot fit on that grid, the margin is relaxed to keep it on screen.
+Saved normalized centers remain unchanged until a control is moved; loading or rotating does not resnap them.
+Visible quick controls take input before the minimap and central block, including while editing. The explicit mobile
+loot command does not depend on the virtual mouse position; modal and movement locks, keyboard capture, and existing
+loot reachability and interaction checks still apply. Its potion slots and the separate editable P1–P3
+buttons send the existing 1–3 belt commands when tapped in the world. In the normal skill window, tapping a learned
+active skill selects a compatible socket (right preferred); tapping F1–F8 above the window assigns the selected skill.
+Closing the window returns the normal function-key controls, which select their assigned skill. The existing attack and
+skill buttons activate the left and right sockets respectively. Touch shortcut assignments are saved per character name and class in `mobile-skill-shortcuts.json` beside the
+Android client settings. The file is loaded before the game loop, restored after learned skills synchronize, and
+written atomically off the game thread after a successful assignment. Rebinding a skill removes its previous key from
+both the active and saved table. Unknown, unlearned or incompatible entries are not restored. The desktop is unchanged. The Android inventory, status and skill windows are centered horizontally and vertically in logical HUD coordinates.
+While the inventory is visible, its original belt and central HUD move with the window; the saved mobile HUD position
+is not overwritten. Drawing, item placement, warehouse placement, attribute buttons, skill nodes, close buttons and
+hit testing share the centered window origin. The F1–F8 assignment row sits above the centered skill window.
+The desktop HUD is unchanged.
 
 - Layout: the HUD is authored in 800x600 logical units. `HudLayout.Create` picks the largest integer scale that fits;
   bottom-anchored elements move down by `BottomOffset`, right-anchored ones right by `RightOffset`. Convert the mouse

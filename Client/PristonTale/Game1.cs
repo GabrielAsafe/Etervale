@@ -23,6 +23,8 @@ public class Game1 : Game
 
     private KeyboardState _lastKeyboardState;
     private readonly FrameTiming _timing = new();
+    private long _lastMobilePerfLog;
+    private bool _mobileFirstEndDraw;
     private readonly PresentationSettings _presentation = new();
     private readonly ClientSettingsStore _settingsStore;
     private PresentationController _presentationController;
@@ -31,8 +33,10 @@ public class Game1 : Game
     public Game1(string settingsPath = null)
     {
         Mouse.EtervaleAndroid = OperatingSystem.IsAndroid();
+        Microsoft.Xna.Framework.Graphics.GraphicsDevice.EtervaleAndroidDeferredFinalizers = OperatingSystem.IsAndroid();
         _settingsStore = new ClientSettingsStore(settingsPath ?? ClientSettingsStore.DefaultPath, ConsoleClientLog.Instance);
         _presentation.Requested = _settingsStore.Load();
+        MobileDiagnosticTrace.Mark("game_settings_loaded");
         _graphics = new GraphicsDeviceManager(this)
         {
             PreferredBackBufferWidth = _presentation.Requested.WindowWidth,
@@ -56,9 +60,12 @@ public class Game1 : Game
 
     protected override void LoadContent()
     {
+        MobileDiagnosticTrace.Mark("game_load_content_begin");
         _presentationController = new PresentationController(_presentation, _settingsStore, _graphics, Window);
+        MobileDiagnosticTrace.Mark("presentation_configured");
         _client = new GameClient(GraphicsDevice, Content, ResolveAssetRoot(), ResolveServerAddress(_presentation.Requested.ServerAddress), _presentation);
         _client.LoadContent();
+        MobileDiagnosticTrace.Mark("game_load_content_finished");
         // SDL/desktop cursor scaling can blur the original 32x32 TGA; the client draws it with PointClamp.
         IsMouseVisible = !_client.HasGameCursor;
         Window.TextInput += (_, args) => _client.TypeCharacter(args.Character);
@@ -117,7 +124,7 @@ public class Game1 : Game
 
         if (keyboard.IsKeyDown(Keys.F9) && !_lastKeyboardState.IsKeyDown(Keys.F9))
         {
-            _client.DiagnosticsShown = !_client.DiagnosticsShown;
+            _client.ToggleDiagnostics();
         }
 
         _client.Update(gameTime, IsActive);
@@ -131,7 +138,7 @@ public class Game1 : Game
     // title stays the game's name. Sampled only while shown.
     private void UpdateDiagnostics()
     {
-        if (!_client.DiagnosticsShown || !_timing.TrySample(Stopwatch.GetTimestamp(), out var sample))
+        if (!_client.DiagnosticsShown || !_timing.TrySample(Stopwatch.GetTimestamp(), out var sample, OperatingSystem.IsAndroid() ? 30 : int.MaxValue))
         {
             return;
         }
@@ -142,6 +149,22 @@ public class Game1 : Game
             + $"\nframe p95/p99 {sample.FrameP95Ms:F1}/{sample.FrameP99Ms:F1} ms, work {sample.WorkP95Ms:F1} ms, present {sample.PresentP95Ms:F1} ms,"
             + $" pacing {sample.PacingP95Ms:F1} ms, {sample.AllocatedBytesPerFrame / 1024:F1} KB/frame"
             + $"\n{GraphicsDevice.Viewport.Width}x{GraphicsDevice.Viewport.Height} | {_client.StatusText.Replace(" | ", "\n")}";
+        // Keep the existing overlay and make captures reproducible through adb logcat.
+        // This runs only while diagnostics are visible and never writes a file per frame.
+        if (OperatingSystem.IsAndroid() && Stopwatch.GetElapsedTime(_lastMobilePerfLog).TotalSeconds >= 3)
+        {
+            _lastMobilePerfLog = Stopwatch.GetTimestamp();
+            var settings = _presentation.Rendering;
+            MobileDiagnosticTrace.WritePerformance(_client.Diagnostics.Replace("\n", " | ")
+                + $" | quality={settings.Quality} AA={settings.AntiAliasing} MSAA={settings.MultiSampleCount}"
+                + $" | realisticSky={settings.RealisticSky} IBL={settings.ImageBasedLighting}"
+                + $" | AO={settings.AmbientOcclusion} contact={settings.ContactShadows} exposure={settings.AutoExposure}"
+                + $" | bloom={settings.Bloom} grading={settings.ColorGrading} SSR={settings.ScreenSpaceReflections}"
+                + $" | volumetric={settings.VolumetricLight}"
+                + $" | finalizersQueued={GraphicsDevice.EtervaleNativeFinalizersQueued}"
+                + $" finalizersDrained={GraphicsDevice.EtervaleNativeFinalizersDrained}"
+                + $" finalizersRejected={GraphicsDevice.EtervaleNativeFinalizersRejected}");
+        }
     }
 
     protected override void Draw(GameTime gameTime)
@@ -175,6 +198,11 @@ public class Game1 : Game
         var allocated = GC.GetAllocatedBytesForCurrentThread();
         base.EndDraw();
         _timing.RecordPresentation(Stopwatch.GetTimestamp() - started, GC.GetAllocatedBytesForCurrentThread() - allocated);
+        if (OperatingSystem.IsAndroid() && !_mobileFirstEndDraw)
+        {
+            _mobileFirstEndDraw = true;
+            MobileDiagnosticTrace.Mark("first_end_draw_returned");
+        }
         if (_shutdown is null)
         {
             _presentationController.CaptureWindowSize(GraphicsDevice.Viewport.Width, GraphicsDevice.Viewport.Height);

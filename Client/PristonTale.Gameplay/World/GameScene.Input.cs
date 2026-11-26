@@ -120,9 +120,10 @@ public sealed partial class GameScene
             if (MobileTap is Point screenPoint) SelectMobileWorldPoint(screenPoint);
         }
         // ETERVALE_MOBILE_UI_V32: recolha explícita sem clique ou movimento indiscriminado.
-        if (OperatingSystem.IsAndroid() && MobileLootNearest && !MovementLocked
-            && !KeyboardCaptured && CameraInputEnabled && !WorldClicksBlocked)
+        if (OperatingSystem.IsAndroid() && CanProcessMobileLoot(MobileLootNearest, MovementLocked, KeyboardCaptured, CameraInputEnabled))
+        {
             TryMobileLootNearest();
+        }
         if (OperatingSystem.IsAndroid() && MobileTalkNearest && !MovementLocked
             && !KeyboardCaptured && CameraInputEnabled && !WorldClicksBlocked)
             TryMobileTalkNearest(); // ETERVALE_MOBILE_HUD_EDITOR_V33
@@ -282,6 +283,10 @@ public sealed partial class GameScene
 
     // ETERVALE_MOBILE_UI_V32: encontra apenas drops próximos, e aproveita
     // o mesmo caminho de aproximação e a mesma validação usados pelo rato.
+    // MobileLootNearest is a dedicated HUD command, not a mouse click. The virtual cursor may still be over another widget.
+    internal static bool CanProcessMobileLoot(bool requested, bool movementLocked, bool keyboardCaptured, bool cameraInputEnabled) =>
+        requested && !movementLocked && !keyboardCaptured && cameraInputEnabled;
+
     private bool TryMobileLootNearest()
     {
         if (_groundLoot is null || _lootInteraction is null || _lootInteraction.Busy || _playerBody is null)

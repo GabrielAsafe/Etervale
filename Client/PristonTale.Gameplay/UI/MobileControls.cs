@@ -12,7 +12,7 @@ namespace PristonTale.Gameplay.UI;
 internal sealed class MobileControls
 {
     internal enum Role { None, World, Stick, Toggle, Attack, Skill, Inventory, Skills, Status, Quest, Potion1, Potion2, Potion3, Camera, Settings, ControlSettings, Chat, Size, Opacity, Hand, Reset, Done, Back, TargetNext, ContextCamera,
-        Menu, Loot, Map, Party, Run, System, Talk, Edit, EditSave, EditDefault, Vitals, Minimap, SkillF1, SkillF2, SkillF3, SkillF4, SkillF5, SkillF6, SkillF7, SkillF8 }
+        Menu, Loot, Map, Party, Run, System, Talk, Edit, EditSave, EditDefault, Vitals, Minimap, SkillF1, SkillF2, SkillF3, SkillF4, SkillF5, SkillF6, SkillF7, SkillF8, Diagnostics }
     private readonly record struct Finger(Role Role, Vector2 Start, Vector2 Position);
     private readonly record struct Touch(int Type, long Device, long Id, float X, float Y);
     private readonly Dictionary<(long, long), Finger> _fingers = new();
@@ -31,8 +31,6 @@ internal sealed class MobileControls
     private Role _editingRole;
     private Vector2 _editingGrab;
     private readonly Dictionary<string,Vector2> _positions=new(StringComparer.Ordinal);
-    private readonly Dictionary<(long,long),long> _shortcutPressedAt=new(); // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34
-    private readonly Dictionary<int,(uint SkillId,PristonTale.Simulation.Skills.SkillMouseUse Side)> _mobileShortcuts=new();
     private bool _moreOpen; // ETERVALE_MOBILE_UI_V32
     private bool _touchCameraMode; // ETERVALE_MOBILE_CAMERA_CONTEXT_V31
     private (long, long)? _cameraDragFinger;
@@ -55,20 +53,6 @@ internal sealed class MobileControls
                 if (root.TryGetProperty("Size", out var size) && size.ValueKind == JsonValueKind.Number && size.TryGetInt32(out var n)) _options.Size = n;
                 if (root.TryGetProperty("Opacity", out var opacity) && opacity.ValueKind == JsonValueKind.Number && opacity.TryGetInt32(out var a)) _options.Opacity = a;
                 if (root.TryGetProperty("LeftHanded", out var hand) && hand.ValueKind is JsonValueKind.True or JsonValueKind.False) _options.LeftHanded = hand.GetBoolean();
-                // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34: persistência dos atalhos por toque.
-                if (root.TryGetProperty("SkillShortcuts",out var shortcuts) && shortcuts.ValueKind==JsonValueKind.Object)
-                {
-                    for(int i=0;i<8;i++)
-                    {
-                        if(!shortcuts.TryGetProperty($"F{i+1}",out var entry) || entry.ValueKind!=JsonValueKind.Object)
-                            continue;
-                        if(!entry.TryGetProperty("SkillId",out var id) || !id.TryGetUInt32(out var code))continue;
-                        if(!entry.TryGetProperty("Side",out var sideText) || sideText.ValueKind!=JsonValueKind.String)continue;
-                        if(Enum.TryParse<PristonTale.Simulation.Skills.SkillMouseUse>(sideText.GetString(),out var side)
-                            && side is PristonTale.Simulation.Skills.SkillMouseUse.Left or PristonTale.Simulation.Skills.SkillMouseUse.Right)
-                            _mobileShortcuts[i]=(code,side);
-                    }
-                }
                 // ETERVALE_MOBILE_HUD_EDITOR_V33: centros normalizados, independentes da resolução.
                 if (root.TryGetProperty("Positions",out var points) && points.ValueKind==JsonValueKind.Object)
                     foreach(var item in points.EnumerateObject())
@@ -97,11 +81,35 @@ internal sealed class MobileControls
     public bool TargetNextRequested { get; private set; } // botão ALVO
     public bool MapRequested { get; private set; } // ETERVALE_MOBILE_UI_V32
     public bool LootRequested { get; private set; }
-    public int ShortcutBindRequested { get; private set; }=-1; // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34
     public bool TalkRequested { get; private set; } // ETERVALE_MOBILE_HUD_EDITOR_V33
     public bool UiTouchOnly { get; private set; } // ETERVALE_MOBILE_TAP_UI_V27
     public bool MenuCaptures => _config || _configWasOpen || _moreOpen || _editing;
     private bool _configWasOpen;
+    private bool _diagnosticsRequested;
+
+    internal bool TakeDiagnosticsRequest()
+    {
+        var requested = _diagnosticsRequested;
+        _diagnosticsRequested = false;
+        return requested;
+    }
+    private bool _skillPanel;
+    internal int SkillShortcutRequested { get; private set; } = -1;
+
+    private static readonly string[] SkillShortcutLabels = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8"];
+
+    // Keep the assignment row above the centered skill window, outside its hit area.
+    internal static Rectangle SkillPanelShortcutBounds(HudLayout layout, int index)
+    {
+        const int width = 52;
+        const int height = 42;
+        const int gap = 8;
+        const int count = Widgets.HudSkillBindings.ShortcutCount;
+        var total = count * width + (count - 1) * gap;
+        var origin = Inventory.HudInventoryLayout.CenteredPanelOrigin(layout);
+        var window = Widgets.HudSkillTreeLayout.Window(origin);
+        return new Rectangle(window.Center.X - total / 2 + index * (width + gap), window.Top - height - 12, width, height);
+    }
     [DllImport("mgruntime", EntryPoint = "Etervale_Android_PopTouch", CallingConvention = CallingConvention.Cdecl)]
     private static extern int PopTouch(out int type, out long device, out long id, out float x, out float y);
 
@@ -121,16 +129,7 @@ internal sealed class MobileControls
                     writer.WriteStartArray(item.Key); writer.WriteNumberValue(item.Value.X);
                     writer.WriteNumberValue(item.Value.Y); writer.WriteEndArray();
                 }
-                                writer.WriteEndObject(); // Positions
-                writer.WriteStartObject("SkillShortcuts");
-                foreach(var (index,shortcut) in _mobileShortcuts)
-                {
-                    writer.WriteStartObject($"F{index+1}");
-                    writer.WriteNumber("SkillId",shortcut.SkillId);
-                    writer.WriteString("Side",shortcut.Side.ToString());
-                    writer.WriteEndObject();
-                }
-                writer.WriteEndObject(); writer.WriteEndObject(); // SkillShortcuts, root
+                writer.WriteEndObject(); writer.WriteEndObject();
             }
             File.Move(_settingsPath + ".tmp", _settingsPath, true);
         }
@@ -173,7 +172,8 @@ internal sealed class MobileControls
             Role.Map => new(w-140,206,118,42),
             Role.Chat => new(w-266,254,118,42),
             Role.Run => new(w-140,254,118,42),
-            Role.System => new(w-266,302,244,42),
+            Role.System => new(w-266,302,118,42),
+            Role.Diagnostics => new(w-140,302,118,42),
             Role.Edit => new(w-266,350,244,42),
             Role.Stick => new(24,h-350,140,140),
             Role.Attack => new(w-110,h-315,86,78),
@@ -185,7 +185,7 @@ internal sealed class MobileControls
             Role.Potion1 => new(18,h-405,52,40),
             Role.Potion2 => new(76,h-405,52,40),
             Role.Potion3 => new(134,h-405,52,40),
-            Role.Vitals => new(w/2-128,h-214,256,76),
+            Role.Vitals => Widgets.HudBar.MobileCentralBounds(l),
             Role.Minimap => new(w-144,h-174,128,128),
             Role.EditSave => new(w/2+8,12,104,46),
             Role.EditDefault => new(w/2-112,12,104,46),
@@ -208,49 +208,90 @@ internal sealed class MobileControls
         r.Y=Math.Clamp(r.Y,0,Math.Max(0,h-r.Height));
         return r;
     }
-    // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34: grelha de 16 unidades lógicas.
-    // A margem lateral protege elementos arrastados da câmara do ecrã/notch.
     internal const int HudGridStep = 16;
-    internal static Vector2 SnapHudCenter(HudLayout layout, Rectangle bounds, Vector2 center)
+    internal const int HudGridHorizontalMargin = 48;
+    internal const int HudGridVerticalMargin = 24;
+
+    // Use the integer center of Rectangle, including for an odd width or height.
+    internal static Point SnapHudCenter(HudLayout layout, Rectangle bounds, Vector2 center) => new(
+        SnapHudAxis(layout.Width, bounds.Width, HudGridHorizontalMargin, center.X),
+        SnapHudAxis(layout.Height, bounds.Height, HudGridVerticalMargin, center.Y));
+
+    private static int SnapHudAxis(int extent, int size, int margin, float center)
     {
-        float marginX=Math.Min(48f,Math.Max(0f,(layout.Width-bounds.Width)/2f));
-        float marginY=Math.Min(24f,Math.Max(0f,(layout.Height-bounds.Height)/2f));
-        float x=HudGridStep*MathF.Round(center.X/HudGridStep);
-        float y=HudGridStep*MathF.Round(center.Y/HudGridStep);
-        return new Vector2(
-            Math.Clamp(x,marginX+bounds.Width/2f,layout.Width-marginX-bounds.Width/2f),
-            Math.Clamp(y,marginY+bounds.Height/2f,layout.Height-marginY-bounds.Height/2f));
+        if (size >= extent)
+        {
+            return size / 2;
+        }
+
+        var before = size / 2;
+        var after = size - before;
+        var first = ((margin + before + HudGridStep - 1) / HudGridStep) * HudGridStep;
+        var last = ((extent - margin - after) / HudGridStep) * HudGridStep;
+        // If the safe area is too narrow for a grid point, relax the margin rather than clipping the control.
+        if (extent - margin - after < 0 || first > last)
+        {
+            first = ((before + HudGridStep - 1) / HudGridStep) * HudGridStep;
+            last = ((extent - after) / HudGridStep) * HudGridStep;
+        }
+        if (first > last)
+        {
+            return before + (extent - size) / 2;
+        }
+
+        var snapped = (int)MathF.Round(Math.Clamp(center, first, last) / HudGridStep) * HudGridStep;
+        return Math.Clamp(snapped, first, last);
     }
 
-    private static void DrawHudGrid(HudPainter painter,HudLayout l)
+    // Normalized saved centers are independent of resolution; do not snap them again on load or rotation.
+    internal static Rectangle SavedHudBounds(HudLayout layout, Rectangle bounds, Vector2 center)
     {
-        const int step=HudGridStep;
-        for (int x=48;x<l.Width-48;x+=step)
-            painter.ColorBox(new Rectangle(x,16,1,Math.Max(1,l.Height-32)),95,160,175,45);
-        for (int y=32;y<l.Height-24;y+=step)
-            painter.ColorBox(new Rectangle(48,y,Math.Max(1,l.Width-96),1),95,160,175,45);
+        bounds.X = Math.Clamp((int)MathF.Round(center.X * layout.Width) - bounds.Width / 2, 0, Math.Max(0, layout.Width - bounds.Width));
+        bounds.Y = Math.Clamp((int)MathF.Round(center.Y * layout.Height) - bounds.Height / 2, 0, Math.Max(0, layout.Height - bounds.Height));
+        return bounds;
     }
 
-    // Toque curto seleciona F1..F8; pressão longa (650 ms) associa a habilidade
-    // atualmente escolhida na janela SKILLS, sem mouse + tecla simultâneos.
-    internal const int ShortcutLongPressMs=650;
-    internal static bool IsShortcutLongPress(double milliseconds) => milliseconds>=ShortcutLongPressMs;
-    private static bool IsShortcutRole(Role role) => role>=Role.SkillF1 && role<=Role.SkillF8;
+    private static void DrawHudGrid(HudPainter painter, HudLayout layout)
+    {
+        var left = HudGridHorizontalMargin;
+        var right = layout.Width - HudGridHorizontalMargin;
+        var top = HudGridVerticalMargin;
+        var bottom = layout.Height - HudGridVerticalMargin;
+        if (right <= left || bottom <= top)
+        {
+            return;
+        }
+        for (var x = ((left + HudGridStep - 1) / HudGridStep) * HudGridStep; x <= right; x += HudGridStep)
+        {
+            painter.ColorBox(new Rectangle(x, top, 1, bottom - top), 120, 185, 195, 48);
+        }
+        for (var y = ((top + HudGridStep - 1) / HudGridStep) * HudGridStep; y <= bottom; y += HudGridStep)
+        {
+            painter.ColorBox(new Rectangle(left, y, right - left, 1), 120, 185, 195, 48);
+        }
+    }
+
+    internal void MoveHudControl(HudLayout layout, Role role, Vector2 desiredCenter)
+    {
+        var bounds = Box(layout, role);
+        var center = SnapHudCenter(layout, bounds, desiredCenter);
+        _positions[role.ToString()] = new Vector2(center.X / (float)layout.Width, center.Y / (float)layout.Height);
+    }
+
     private Rectangle Box(HudLayout l, Role role)
     {
         var rectangle=Bounds(l,role,_options.Size,_options.LeftHanded);
         if (_positions.TryGetValue(role.ToString(),out var center))
         {
-            var snapped=SnapHudCenter(l,rectangle,new Vector2(center.X*l.Width,center.Y*l.Height));
-            var x=(int)MathF.Round(snapped.X)-rectangle.Width/2;
-            var y=(int)MathF.Round(snapped.Y)-rectangle.Height/2;
-            rectangle.X=Math.Clamp(x,0,Math.Max(0,l.Width-rectangle.Width));
-            rectangle.Y=Math.Clamp(y,0,Math.Max(0,l.Height-rectangle.Height));
+            rectangle = SavedHudBounds(l, rectangle, center);
         }
         return rectangle;
     }
 
     internal Rectangle MapBounds(HudLayout l) => Box(l,Role.Minimap);
+    internal bool CentralHudVisible => Enabled && _touchAvailable && !_config && !_moreOpen;
+    internal Rectangle CentralHudBounds(HudLayout layout) => Box(layout, Role.Vitals);
+    internal Point CentralHudOrigin(HudLayout layout) => Widgets.HudBar.CentralOrigin(CentralHudBounds(layout));
     private static bool Movable(Role role) => role is Role.Toggle or Role.Menu or Role.ContextCamera
         or Role.Stick or Role.Attack or Role.Skill or Role.TargetNext or Role.Loot or Role.Talk or Role.Camera
         or Role.Potion1 or Role.Potion2 or Role.Potion3 or Role.Vitals or Role.Minimap
@@ -264,20 +305,37 @@ internal sealed class MobileControls
         Role.SkillF1,Role.SkillF2,Role.SkillF3,Role.SkillF4,
         Role.SkillF5,Role.SkillF6,Role.SkillF7,Role.SkillF8];
     private static readonly Role[] Secondary = [Role.Settings,Role.ControlSettings,Role.Inventory,Role.Skills,
-        Role.Status,Role.Quest,Role.Party,Role.Map,Role.Chat,Role.Run,Role.System,Role.Edit];
+        Role.Status,Role.Quest,Role.Party,Role.Map,Role.Chat,Role.Run,Role.System,Role.Diagnostics,Role.Edit];
     private static readonly Role[] Config = [Role.Size,Role.Opacity,Role.Hand,Role.Reset,Role.Done];
-    private Role Hit(HudLayout l, Point p, bool available, bool backAvailable)
+    internal Role Hit(HudLayout l, Point p, bool available, bool backAvailable)
     {
         if(_config) { foreach(var role in Config) if(Box(l,role).Contains(p)) return role; return Role.None; }
-        if(!available) return backAvailable && Box(l,Role.Back).Contains(p) ? Role.Back : Role.World;
+        if (!available)
+        {
+            if (backAvailable && Box(l, Role.Back).Contains(p))
+            {
+                return Role.Back;
+            }
+            if (_skillPanel)
+            {
+                for (var i = 0; i < Widgets.HudSkillBindings.ShortcutCount; i++)
+                {
+                    if (SkillPanelShortcutBounds(l, i).Contains(p))
+                    {
+                        return (Role)((int)Role.SkillF1 + i);
+                    }
+                }
+            }
+            return Role.World;
+        }
         if(_editing)
         {
             if(Box(l,Role.EditSave).Contains(p))return Role.EditSave;
             if(Box(l,Role.EditDefault).Contains(p))return Role.EditDefault;
-            if(Box(l,Role.Minimap).Contains(p))return Role.Minimap;
-            if(Box(l,Role.Vitals).Contains(p))return Role.Vitals;
             foreach(var role in Quick)
                 if(VisibleQuick(role)&&VisibleGameQuick(role)&&Box(l,role).Contains(p))return role;
+            if(Box(l,Role.Minimap).Contains(p))return Role.Minimap;
+            if(Box(l,Role.Vitals).Contains(p))return Role.Vitals;
             foreach(var role in new[]{Role.Toggle,Role.Menu,Role.ContextCamera})
                 if(Box(l,role).Contains(p))return role;
             return Role.None; // EDITAR nunca envia cliques ao cenário.
@@ -290,14 +348,42 @@ internal sealed class MobileControls
             foreach(var role in Secondary)if(Box(l,role).Contains(p))return role;
             return Role.None;
         }
-        if(Box(l,Role.Minimap).Contains(p))return Role.None; // mapa é só UI.
-        if(!_expanded)return Role.World;
-        foreach(var role in Quick)
-            if(VisibleQuick(role)&&VisibleGameQuick(role)&&Box(l,role).Contains(p))return role;
+        if (_expanded)
+        {
+            foreach (var role in Quick)
+            {
+                if (VisibleQuick(role) && VisibleGameQuick(role) && Box(l, role).Contains(p))
+                {
+                    return role;
+                }
+            }
+        }
+        // The quick controls are drawn over the minimap and central HUD.
+        if (Box(l, Role.Minimap).Contains(p))
+        {
+            return Role.None;
+        }
+        if (CentralHudVisible && CentralHudBounds(l).Contains(p))
+        {
+            var origin = CentralHudOrigin(l);
+            for (var box = 0; box < PristonTale.Simulation.Items.PotionBelt.Boxes; box++)
+            {
+                if (Inventory.HudInventoryLayout.Belt(origin, box).Contains(p))
+                {
+                    return (Role)((int)Role.Potion1 + box);
+                }
+            }
+            return Role.None;
+        }
         return Role.World;
     }
-    private void OnPress(Role role)
+    internal void OnPress(Role role)
     {
+        if (_skillPanel && role >= Role.SkillF1 && role <= Role.SkillF8)
+        {
+            SkillShortcutRequested = (int)role - (int)Role.SkillF1;
+            return;
+        }
         if(_moreOpen && Array.IndexOf(Secondary,role)>=0)_moreOpen=false;
         switch(role)
         {
@@ -305,7 +391,15 @@ internal sealed class MobileControls
             case Role.Menu: _moreOpen=!_moreOpen; break;
             case Role.ContextCamera: _touchCameraMode=!_touchCameraMode; _cameraDragFinger=null; break;
             case Role.Back: PanelCloseRequested=true; break;
+            case Role.Potion1:
+            case Role.Potion2:
+            case Role.Potion3:
+                _keys.Add((Keys)((int)Keys.D1 + (int)role - (int)Role.Potion1));
+                break;
             case Role.Settings: SettingsRequested=true; break;
+            case Role.Diagnostics:
+                _diagnosticsRequested = true;
+                break;
             case Role.ControlSettings: _config=true; break;
             case Role.Map: MapRequested=true; break;
             case Role.Loot: LootRequested=true; break;
@@ -382,17 +476,6 @@ internal sealed class MobileControls
             _events.Dequeue();
             if (t.Type == 3)
             {
-                // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34: só emitir F no UP.
-                if(_shortcutPressedAt.Remove(id,out var started) && _fingers.TryGetValue(id,out var released)
-                   && IsShortcutRole(released.Role) && !_editing && !_config && available
-                   && Vector2.DistanceSquared(released.Start,released.Position)<=20f*20f)
-                {
-                    int slot=(int)released.Role-(int)Role.SkillF1;
-                    if(IsShortcutLongPress(System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds))
-                        ShortcutBindRequested=slot;
-                    else
-                        _keys.Add((Keys)((int)Keys.F1+slot));
-                }
                 if (_editing && _editingFinger==id) { _editingFinger=null; Save(); } // ETERVALE_MOBILE_HUD_EDITOR_V33
                 if (_fingers.TryGetValue(id,out var finished) && finished.Role==Role.World
                     && !_touchCameraMode // ETERVALE_MOBILE_CAMERA_CONTEXT_V31: no modo câmara, arrastar/tocar não seleciona monstros
@@ -416,8 +499,6 @@ internal sealed class MobileControls
                 var role = Hit(l,point,available,backAvailable); // ETERVALE_MOBILE_UI_V32
                 _fingers[id] = new(role,p,p); _pressedThisFrame.Add(id);
                 if (WorldFingerCount()>1) _multiWorldGesture=true; // ETERVALE_MOBILE_TARGET_LOOT_V28
-                if(!_editing && IsShortcutRole(role) && available)
-                    _shortcutPressedAt[id]=System.Diagnostics.Stopwatch.GetTimestamp(); // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34
                 if (_editing && Movable(role))
                 {
                     _editingFinger=id; _editingRole=role;
@@ -430,9 +511,7 @@ internal sealed class MobileControls
                 _fingers[id]=f with { Position=p };
                 if (_editing && _editingFinger==id && Movable(_editingRole))
                 {
-                    var original=Box(l,_editingRole);
-                    var snapped=SnapHudCenter(l,original,p+_editingGrab); // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34
-                    _positions[_editingRole.ToString()]=new Vector2(snapped.X/l.Width,snapped.Y/l.Height);
+                    MoveHudControl(l, _editingRole, p + _editingGrab);
                 }
             }
         }
@@ -460,33 +539,18 @@ internal sealed class MobileControls
     // No cenário ativo, o toque não é um clique; com painéis abertos,
     // o mesmo dedo controla o HUD. Isto inclui menus, chat e inventário.
     internal static bool ForwardWorldTouchToHud(bool gameplay, bool overlayAvailable) => !gameplay || !overlayAvailable; // ETERVALE_MOBILE_TAP_UI_V27
-    // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34: o HUD grava os atalhos no mesmo JSON.
-    internal bool TryGetMobileShortcut(int index,out uint skillId,
-        out PristonTale.Simulation.Skills.SkillMouseUse side)
-    {
-        if(_mobileShortcuts.TryGetValue(index,out var binding))
-        {
-            skillId=binding.SkillId;side=binding.Side;return true;
-        }
-        skillId=0;side=default;return false;
-    }
-    internal void SaveMobileShortcut(int index,uint skillId,PristonTale.Simulation.Skills.SkillMouseUse side)
-    {
-        if(index<0||index>=8)return;
-        _mobileShortcuts[index]=(skillId,side);
-        Save();
-    }
-
     public MouseState HudMouse(MouseState mouse) => WorldActionOnly ? Pointer(mouse,false,false) : mouse;
     public KeyboardState Merge(KeyboardState keyboard)
     {
         if (_keys.Count == 0) return keyboard;
         var keys = new HashSet<Keys>(keyboard.GetPressedKeys()); keys.UnionWith(_keys); return new KeyboardState(keys.ToArray());
     }
-    public void Update(Viewport viewport, GameTime time, bool active, bool available, bool typing, bool gameplay = true, bool backAvailable = false)
+    public void Update(Viewport viewport, GameTime time, bool active, bool available, bool typing, bool gameplay = true, bool backAvailable = false, bool skillPanel = false)
     {
+        SkillShortcutRequested = -1;
+        _skillPanel = gameplay && skillPanel && !typing;
         if (!Enabled) return;
-        _keys.Clear(); ShortcutBindRequested=-1; TalkRequested=false; // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34 MapRequested=LootRequested=false; Movement=Orbit=_stick=Vector2.Zero; PinchZoomDelta=0f; SettingsRequested=false; CloseRequested=PanelCloseRequested=WorldActionOnly=UiTouchOnly=false; WorldTap=null; TargetNextRequested=false; _configWasOpen=_config;
+        _keys.Clear(); TalkRequested=false; MapRequested=LootRequested=false; Movement=Orbit=_stick=Vector2.Zero; PinchZoomDelta=0f; SettingsRequested=false; CloseRequested=PanelCloseRequested=WorldActionOnly=UiTouchOnly=false; WorldTap=null; TargetNextRequested=false; _configWasOpen=_config;
         Mouse.EtervaleOverride=null; var raw=Mouse.GetState(); var l=HudLayout.Of(viewport);
         if (!_cursorReady || _width!=viewport.Width || _height!=viewport.Height)
         { _cursor=new Vector2(viewport.Width/2f,viewport.Height/2f); _cursorReady=true; _width=viewport.Width; _height=viewport.Height; _fingers.Clear(); }
@@ -558,16 +622,15 @@ internal sealed class MobileControls
                 case Role.Party: _keys.Add(Keys.D); break;
                 case Role.Run: _keys.Add(Keys.R); break;
                 case Role.System: _keys.Add(Keys.X); break;
-                case Role.SkillF1: break; // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34 short/long no UP
-                case Role.SkillF2: break; // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34 short/long no UP
-                case Role.SkillF3: break; // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34 short/long no UP
-                case Role.SkillF4: break; // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34 short/long no UP
-                case Role.SkillF5: break; // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34 short/long no UP
-                case Role.SkillF6: break; // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34 short/long no UP
-                case Role.SkillF7: break; // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34 short/long no UP
-                case Role.SkillF8: break; // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34 short/long no UP
-                case Role.Chat: _keys.Add(Keys.Enter); break; case Role.Potion1: _keys.Add(Keys.D1); break;
-                case Role.Potion2: _keys.Add(Keys.D2); break; case Role.Potion3: _keys.Add(Keys.D3); break;
+                case Role.SkillF1: _keys.Add(Keys.F1); break;
+                case Role.SkillF2: _keys.Add(Keys.F2); break;
+                case Role.SkillF3: _keys.Add(Keys.F3); break;
+                case Role.SkillF4: _keys.Add(Keys.F4); break;
+                case Role.SkillF5: _keys.Add(Keys.F5); break;
+                case Role.SkillF6: _keys.Add(Keys.F6); break;
+                case Role.SkillF7: _keys.Add(Keys.F7); break;
+                case Role.SkillF8: _keys.Add(Keys.F8); break;
+                case Role.Chat: _keys.Add(Keys.Enter); break;
             }
         }
         // ETERVALE_MOBILE_CAMERA_CONTEXT_V31: em CAMARA, o gesto no mundo substitui a seleção por toque.
@@ -600,32 +663,19 @@ internal sealed class MobileControls
         painter.TextCentered(title,r.Left,r.Right,r.Center.Y-painter.TextHeight/2,
             selected?new Color(255,230,159):new Color(235,218,181));
     }
-    // ETERVALE_MOBILE_HUD_EDITOR_V33: barras compactas em vez do HUD inferior clássico.
-    private void DrawVitals(HudPainter painter,HudLayout l,OwnerState state)
-    {
-        var rect=Box(l,Role.Vitals);
-        painter.ColorBox(rect,12,14,18,220*_options.Opacity/100);
-        if(state is null)return;
-        void Gauge(int row,string label,long current,long maximum,byte red,byte green,byte blue)
-        {
-            int y=rect.Y+4+row*18;
-            painter.ColorBox(new Rectangle(rect.X+32,y,Math.Max(1,rect.Width-38),13),41,43,43,220);
-            int width=maximum<=0?0:(int)(Math.Clamp((double)current/maximum,0,1)*Math.Max(1,rect.Width-38));
-            if(width>0)painter.ColorBox(new Rectangle(rect.X+32,y,width,13),red,green,blue,235);
-            painter.TextCentered(label,rect.X,rect.X+32,y,new Color(235,222,185));
-        }
-        Gauge(0,"HP",state.Life,state.MaxLife,195,55,53);
-        Gauge(1,"MP",state.Mana,state.MaxMana,50,105,200);
-        Gauge(2,"RES",state.Stamina,state.MaxStamina,183,159,55);
-        Gauge(3,"EXP",(long)(PristonTale.Gameplay.UI.Widgets.HudBar.ExperienceFraction(state)*1000),1000,117,180,99);
-    }
-
-    public void Draw(HudPainter painter,HudLayout l,bool available,bool backAvailable,OwnerState state)
+    public void Draw(HudPainter painter,HudLayout l,bool available,bool backAvailable,OwnerState state, bool skillPanel = false)
     {
         if(!Enabled||!_touchAvailable)return;
         if(!available)
         {
-            if(backAvailable)Button(painter,Box(l,Role.Back),"VOLTAR");
+            if (backAvailable) Button(painter, Box(l, Role.Back), "VOLTAR");
+            if (skillPanel)
+            {
+                for (var i = 0; i < Widgets.HudSkillBindings.ShortcutCount; i++)
+                {
+                    Button(painter, SkillPanelShortcutBounds(l, i), SkillShortcutLabels[i]);
+                }
+            }
             return;
         }
         if(_config)
@@ -638,10 +688,9 @@ internal sealed class MobileControls
             Button(painter,Box(l,Role.Done),"OK");
             return;
         }
-        if(_editing)DrawHudGrid(painter,l); // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34
-        if(!_moreOpen)DrawVitals(painter,l,state);
         if(_editing)
         {
+            DrawHudGrid(painter, l);
             painter.ColorBox(new Rectangle(l.Width/2-119,7,238,57),10,29,29,220);
             Button(painter,Box(l,Role.EditDefault),"REPOR");
             Button(painter,Box(l,Role.EditSave),"GUARDAR",true);
@@ -662,7 +711,7 @@ internal sealed class MobileControls
                     Role.Settings=>"CONFIG",Role.ControlSettings=>"PAD",Role.Inventory=>"BOLSA",
                     Role.Skills=>"SKILLS",Role.Status=>"STATUS",Role.Quest=>"QUEST",
                     Role.Party=>"GRUPO",Role.Map=>"MAPA",Role.Chat=>"CHAT",
-                    Role.Run=>"CORRER",Role.System=>"SISTEMA",Role.Edit=>"EDITAR HUD",_=>""
+                    Role.Run=>"CORRER",Role.System=>"SISTEMA",Role.Diagnostics=>"METRICAS",Role.Edit=>"EDITAR HUD",_=>""
                 };
                 if(title.Length>0)Button(painter,Box(l,role),title);
             }
@@ -693,7 +742,10 @@ internal sealed class MobileControls
     }
     public void Reset(bool preservePointer = false)
     {
+        _diagnosticsRequested = false;
+        SkillShortcutRequested = -1;
+        _skillPanel = false;
         if(!Enabled)return;
-        if(!preservePointer) Mouse.EtervaleOverride=null; _events.Clear(); _fingers.Clear(); _keys.Clear(); _waitPad=true; _wasActive=false; _config=false; _configWasOpen=false; _moreOpen=false; _editing=false; _editingFinger=null; _shortcutPressedAt.Clear(); ShortcutBindRequested=-1; TalkRequested=false; MapRequested=LootRequested=false; _cursorReady=false; _touchCameraMode=false; _cameraDragFinger=null; _multiWorldGesture=false; WorldTap=null; TargetNextRequested=false; _previousPinchSeparation=null; Movement=Orbit=Vector2.Zero; PinchZoomDelta=0f; SettingsRequested=false; WorldActionOnly=UiTouchOnly=CloseRequested=PanelCloseRequested=false; _lastAvailable=false; _rawReady=false;
+        if(!preservePointer) Mouse.EtervaleOverride=null; _events.Clear(); _fingers.Clear(); _keys.Clear(); _waitPad=true; _wasActive=false; _config=false; _configWasOpen=false; _moreOpen=false; _editing=false; _editingFinger=null; TalkRequested=false; MapRequested=LootRequested=false; _cursorReady=false; _touchCameraMode=false; _cameraDragFinger=null; _multiWorldGesture=false; WorldTap=null; TargetNextRequested=false; _previousPinchSeparation=null; Movement=Orbit=Vector2.Zero; PinchZoomDelta=0f; SettingsRequested=false; WorldActionOnly=UiTouchOnly=CloseRequested=PanelCloseRequested=false; _lastAvailable=false; _rawReady=false;
     }
 }

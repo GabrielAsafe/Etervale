@@ -99,7 +99,7 @@
 -end
 --- a/native/monogame/vulkan/MGG_Vulkan.cpp
 +++ b/native/monogame/vulkan/MGG_Vulkan.cpp
-@@ -14,6 +14,22 @@
+@@ -14,6 +14,25 @@
  #include "SpriteEffect.vk.mgfxo.h"
  #include "mg_effect.h"
  
@@ -117,12 +117,53 @@
 +#include <deque>
 +#include <vector>
 +#include <thread>
++#include <chrono>
 +#include <string>
++#include <cstdlib>
++#include <cstring>
 +
  #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
  #define VULKAN_HPP_NO_EXCEPTIONS
  #define VULKAN_HPP_TYPESAFE_CONVERSION 1
-@@ -139,12 +155,14 @@
+@@ -38,6 +57,26 @@
+ #include <volk.h>
+ #endif
+ 
++
++#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
++#include <android/log.h>
++
++static thread_local const char* MGVK_TransferDiagnosticPath = nullptr;
++
++static VKAPI_ATTR VkBool32 VKAPI_CALL MGVK_AndroidValidationCallback(
++    VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT,
++    const VkDebugUtilsMessengerCallbackDataEXT* data, void*)
++{
++    const int priority = (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) ? ANDROID_LOG_ERROR : ANDROID_LOG_WARN;
++    if (priority == ANDROID_LOG_ERROR && MGVK_TransferDiagnosticPath)
++        __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "transferPath=%s", MGVK_TransferDiagnosticPath);
++    __android_log_print(priority, "ETERVALE_VK_VALIDATION", "%s: %s",
++        data && data->pMessageIdName ? data->pMessageIdName : "validation",
++        data && data->pMessage ? data->pMessage : "(no message)");
++    return VK_FALSE;
++}
++#endif
++
+ #define VMA_IMPLEMENTATION
+ #define VMA_STATIC_VULKAN_FUNCTIONS 1
+ #include <vk_mem_alloc.h>
+@@ -48,6 +87,10 @@
+ #include <SDL_events.h>
+ #endif
+ 
++#if defined(__ANDROID__)
++#include <android/log.h>
++#endif
++
+ #ifdef _WIN32
+ #define NOMINMAX
+ #include <Windows.h>
+@@ -139,12 +182,14 @@
  struct MGVK_TargetSetCache
  {
  	MGVK_TargetSet set;
@@ -137,7 +178,7 @@
  };
  
  struct MGVK_PipelineState
-@@ -167,8 +185,34 @@
+@@ -167,8 +212,34 @@
  	VkPipeline cache = VK_NULL_HANDLE;
  };
  
@@ -172,7 +213,7 @@
  	MGG_Shader* vertex;
  	MGG_Shader* pixel;
  	VkPipelineLayout layout;
-@@ -184,6 +228,9 @@
+@@ -184,6 +255,9 @@
  	VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
  	VkSemaphore imageAcquiredSemaphore = VK_NULL_HANDLE;
  	VkFence completedFence = VK_NULL_HANDLE;
@@ -182,7 +223,7 @@
  };
  
  struct MGVK_Swapchain
-@@ -223,6 +270,12 @@
+@@ -223,6 +297,12 @@
  	VmaAllocation allocation = VK_NULL_HANDLE;
  
  	uint8_t* mapped = nullptr;
@@ -195,7 +236,7 @@
  };
  
  struct MGVK_Transfer
-@@ -236,6 +289,47 @@
+@@ -236,6 +316,47 @@
  
  const int MAX_TEXTURE_SLOTS = 16;
  
@@ -243,7 +284,7 @@
  struct MGG_GraphicsDevice
  {
  	VkInstance instance = VK_NULL_HANDLE;
-@@ -246,6 +340,13 @@
+@@ -246,6 +367,13 @@
  	VkPhysicalDeviceMemoryProperties deviceMemoryProperties;
  	bool customBorderColorSupported = false;
  
@@ -257,7 +298,7 @@
  	VkDevice device = VK_NULL_HANDLE;
  
  	std::recursive_mutex queueMutex;
-@@ -280,6 +381,11 @@
+@@ -280,6 +408,11 @@
  	VkRect2D scissor = { 0 };
  	bool scissorDirty = false;
  
@@ -269,8 +310,13 @@
  #if defined(MG_SDL2)
  	SDL_Window* window = nullptr;
  #else
-@@ -313,23 +419,35 @@
+@@ -311,25 +444,40 @@
+ 	bool shaderDirty = false;
+ 	std::map<uint64_t, MGVK_Program*> shader_programs;
  	std::vector<MGG_Shader*> all_shaders;
++	// Etervale fork: destruction requests may arrive independently of frame recording.
++	std::mutex shaderRetirementMutex;
++	std::queue<MGG_Shader*> retiredShaders;
  
  	VkPipelineCache pipelineCache = VK_NULL_HANDLE;
 -	std::map<uint32_t, MGVK_PipelineCache> pipelines;
@@ -311,7 +357,7 @@
  	VkDescriptorSet descriptorSets[2] = { 0 };
  	uint32_t dynamicOffsets[2] = { 0 };
  
-@@ -351,12 +469,26 @@
+@@ -351,12 +499,28 @@
  	std::vector<MGG_Texture*> all_textures;
  
  	std::vector<MGG_OcclusionQuery*> deferredOcclusionQueries;
@@ -333,12 +379,14 @@
  {
  	FrameCounter writeFrame = -1;
  	FrameCounter frame = 0;
++	// Etervale fork: owned textures survive the frame in which retirement was requested.
++	FrameCounter retireFrame = 0;
 +	// Etervale fork: the frame whose command buffer holds an upload into this texture (MGG_Texture_SetData), -1 if none.
 +	FrameCounter uploadFrame = -1;
  
  	MGTextureType type = MGTextureType::_2D;
  	MGSurfaceFormat format = MGSurfaceFormat::Color;
-@@ -391,10 +523,16 @@
+@@ -391,10 +555,16 @@
  
  	MGDepthFormat depthFormat = MGDepthFormat::None;
  	MGG_Texture* depthTexture = nullptr;
@@ -355,7 +403,7 @@
  	std::vector<VkVertexInputAttributeDescription> attributes;
  	std::vector<VkVertexInputBindingDescription> bindings;
  };
-@@ -403,15 +541,29 @@
+@@ -403,15 +573,32 @@
  {
  	FrameCounter frame;
  	VkDescriptorSet set;
@@ -376,6 +424,9 @@
  struct MGG_Shader
  {
  	uint32_t id;
++	bool retirementRequested = false; // protected by shaderRetirementMutex
++	bool retirementStarted = false;   // render-thread only
++	FrameCounter retireFrame = 0;
  
  	MGShaderStage stage;
  
@@ -385,7 +436,7 @@
  	VkShaderModule module;
  	VkDescriptorSetLayout setLayout;
  
-@@ -426,11 +578,19 @@
+@@ -426,11 +613,19 @@
  	mguint textureSlots;
  	mguint samplerSlots;
  
@@ -406,7 +457,7 @@
  };
  
  struct MGVK_BindingInfo
-@@ -446,6 +606,8 @@
+@@ -446,6 +641,8 @@
  	FrameCounter frame;
  	mguint hash;
  	mgint refs;
@@ -415,7 +466,7 @@
  	VkPipelineColorBlendStateCreateInfo info;
  	VkPipelineColorBlendAttachmentState attachments[4];
  };
-@@ -455,6 +617,8 @@
+@@ -455,6 +652,8 @@
  	FrameCounter frame;
  	mguint hash;
  	mgint refs;
@@ -424,7 +475,7 @@
  	VkPipelineDepthStencilStateCreateInfo info;
  };
  
-@@ -463,6 +627,8 @@
+@@ -463,6 +662,8 @@
  	FrameCounter frame;
  	mguint hash;
  	mgint refs;
@@ -433,7 +484,33 @@
  	VkPipelineRasterizationStateCreateInfo info;
  	mgbool scissorTestEnable;
  	mgbool multiSampleAntiAlias;
-@@ -515,6 +681,10 @@
+@@ -471,6 +672,8 @@
+ struct MGG_SamplerState
+ {
+ 	uint64_t id;
++	// Etervale fork: retirement starts no earlier than the last frame in which this sampler is bound.
++	FrameCounter retireFrame = 0;
+ 	VkSampler sampler;
+ 	MGG_SamplerState_Info info;
+ };
+@@ -497,10 +700,11 @@
+ static MGG_Buffer* MGVK_Buffer_Create(MGG_GraphicsDevice* device, MGBufferType type, mgint sizeInBytes, bool no_push);
+ static void MGVK_DestroyPipelines(MGG_GraphicsDevice* device, std::function<bool(const MGVK_PipelineState&)> compare);
+ static void MGVK_DestroyFrameResources(MGG_GraphicsDevice* device, FrameCounter currentFrame, mgbyte free_all);
++static void MGVK_RetireShaders(MGG_GraphicsDevice* device, bool shutdown);
+ static void MGVK_UpdateRenderPass(MGG_GraphicsDevice* device, FrameCounter currentFrame, VkCommandBuffer commandBuffer);
+ static VkCommandBuffer MGVK_BeginNewCommandBuffer(MGG_GraphicsDevice* device, VkCommandPool pool = VK_NULL_HANDLE);
+ static void MGVK_ExecuteAndFreeCommandBuffer(MGG_GraphicsDevice* device, VkCommandBuffer commandBuffer, VkCommandPool pool = VK_NULL_HANDLE);
+-static void MGVK_ProcessDescriptorCaches(MGG_GraphicsDevice* device, FrameCounter currentFrame);
++static void MGVK_ProcessDescriptorCaches(MGG_GraphicsDevice* device, FrameCounter currentFrame, bool all = false);
+ static void MGVK_CmdTransitionImageLayout(
+ 	VkCommandBuffer cmd,
+ 	VkImage image,
+@@ -512,9 +716,14 @@
+ 	uint32_t baseArrayLayer = 0,
+ 	uint32_t layerCount = 1);
+ static void MGVK_FlushCommands(MGG_GraphicsDevice* device, MGVK_Frame& frame);
++static void MGVK_WaitForCompletedFence(MGG_GraphicsDevice* device, VkFence fence, const char* operation);
  static void MGVK_PrepareFrame(MGG_GraphicsDevice* device);
  static void MGVK_CleanupPendingTransfers(MGG_GraphicsDevice* device);
  static void MGVK_WaitPendingTransfers(MGG_GraphicsDevice* device, MGG_Texture* texture);
@@ -444,7 +521,7 @@
  
  
  static VkSampleCountFlagBits ToVkSampleCount(mgint multiSampleCount)
-@@ -604,11 +774,20 @@
+@@ -604,11 +813,20 @@
  		return VK_FORMAT_BC3_SRGB_BLOCK;
  	case MGSurfaceFormat::Dxt1a:
  		return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
@@ -466,7 +543,7 @@
  static VkFormat ToVkFormat(MGDepthFormat format)
  {
  	switch (format)
-@@ -622,6 +801,8 @@
+@@ -622,6 +840,8 @@
  #else
  		return VkFormat::VK_FORMAT_D24_UNORM_S8_UINT;
  #endif
@@ -475,7 +552,7 @@
  	default:
  		return VkFormat::VK_FORMAT_UNDEFINED;
  	}
-@@ -656,7 +837,7 @@
+@@ -656,7 +876,7 @@
  	case MGVertexElementFormat::HalfVector4:
  		return VK_FORMAT_R16G16B16A16_SFLOAT;
  	default:
@@ -484,7 +561,7 @@
  	}
  }
  
-@@ -675,7 +856,7 @@
+@@ -675,7 +895,7 @@
  	case MGPrimitiveType::PointList:
  		return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
  	default:
@@ -493,7 +570,7 @@
  	}
  }
  
-@@ -690,7 +871,7 @@
+@@ -690,7 +910,7 @@
  	case MGTextureType::Cube:
  		return VK_IMAGE_VIEW_TYPE_CUBE;
  	default:
@@ -502,7 +579,7 @@
  	}
  }
  
-@@ -705,7 +886,7 @@
+@@ -705,7 +925,7 @@
  	case MGTextureType::Cube:
  		return VK_IMAGE_TYPE_2D; // Cube maps are treated as 2D images with cube view.
  	default:
@@ -511,7 +588,274 @@
  	}
  }
  
-@@ -1198,6 +1379,17 @@
+@@ -778,6 +998,111 @@
+ 	return false;
+ }
+ 
++// ETERVALE_H700_DIRECT_DISPLAY: opt-in fbdev/VR display path for H700.
++// Works with SDL_VIDEODRIVER=dummy. It intentionally does not touch desktop WSI.
++static bool MGVK_H700DirectDisplayEnabled()
++{
++#if defined(__linux__)
++    const char* flag = std::getenv("MG_H700_DIRECT_DISPLAY");
++    return flag != nullptr && flag[0] == '1' && flag[1] == '\0';
++#else
++    return false;
++#endif
++}
++
++#if defined(__linux__)
++static bool MGVK_CreateH700DisplaySurface(
++    VkInstance instance, VkPhysicalDevice gpu, VkSurfaceKHR* surface)
++{
++    *surface = VK_NULL_HANDLE;
++    uint32_t count = 0;
++    VkResult err = vkGetPhysicalDeviceDisplayPropertiesKHR(gpu, &count, nullptr);
++    if (err != VK_SUCCESS || count == 0) {
++        fprintf(stderr, "H700: no Vulkan displays (%d)\n", (int)err);
++        return false;
++    }
++    std::vector<VkDisplayPropertiesKHR> displays(count);
++    err = vkGetPhysicalDeviceDisplayPropertiesKHR(gpu, &count, displays.data());
++    if (err != VK_SUCCESS) return false;
++
++    // Favor the framebuffer identified by the working MaliSX2 probe.
++    VkDisplayKHR display = displays[0].display;
++    for (const auto& entry : displays) {
++        if (entry.displayName && strstr(entry.displayName, "/dev/fb0")) {
++            display = entry.display;
++            break;
++        }
++    }
++
++    count = 0;
++    err = vkGetDisplayModePropertiesKHR(gpu, display, &count, nullptr);
++    if (err != VK_SUCCESS || count == 0) return false;
++    std::vector<VkDisplayModePropertiesKHR> modes(count);
++    err = vkGetDisplayModePropertiesKHR(gpu, display, &count, modes.data());
++    if (err != VK_SUCCESS) return false;
++    const VkDisplayModePropertiesKHR* chosen = &modes[0];
++    for (const auto& entry : modes) {
++        if (entry.parameters.visibleRegion.width == 640 &&
++            entry.parameters.visibleRegion.height == 480) {
++            chosen = &entry;
++            break;
++        }
++    }
++
++    count = 0;
++    err = vkGetPhysicalDeviceDisplayPlanePropertiesKHR(gpu, &count, nullptr);
++    if (err != VK_SUCCESS || count == 0) return false;
++    std::vector<VkDisplayPlanePropertiesKHR> planes(count);
++    err = vkGetPhysicalDeviceDisplayPlanePropertiesKHR(gpu, &count, planes.data());
++    if (err != VK_SUCCESS) return false;
++
++    uint32_t selectedPlane = count;
++    for (uint32_t index = 0; index < count; ++index) {
++        uint32_t supportedCount = 0;
++        if (vkGetDisplayPlaneSupportedDisplaysKHR(gpu, index, &supportedCount, nullptr)
++            != VK_SUCCESS || supportedCount == 0)
++            continue;
++        std::vector<VkDisplayKHR> supported(supportedCount);
++        if (vkGetDisplayPlaneSupportedDisplaysKHR(gpu, index, &supportedCount,
++                                                 supported.data()) != VK_SUCCESS)
++            continue;
++        if (std::find(supported.begin(), supported.end(), display) != supported.end()) {
++            selectedPlane = index;
++            break;
++        }
++    }
++    if (selectedPlane == count) {
++        fprintf(stderr, "H700: no compatible display plane\n");
++        return false;
++    }
++
++    VkDisplayPlaneCapabilitiesKHR caps = {};
++    err = vkGetDisplayPlaneCapabilitiesKHR(gpu, chosen->displayMode, selectedPlane, &caps);
++    if (err != VK_SUCCESS) return false;
++    if ((caps.supportedAlpha & VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR) == 0) {
++        fprintf(stderr, "H700: expected opaque plane alpha\n");
++        return false;
++    }
++    VkDisplaySurfaceCreateInfoKHR info = { VK_STRUCTURE_TYPE_DISPLAY_SURFACE_CREATE_INFO_KHR };
++    info.displayMode = chosen->displayMode;
++    info.planeIndex = selectedPlane;
++    info.planeStackIndex = planes[selectedPlane].currentStackIndex;
++    info.transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
++    info.globalAlpha = 1.0f;
++    info.alphaMode = VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR;
++    info.imageExtent = chosen->parameters.visibleRegion;
++    err = vkCreateDisplayPlaneSurfaceKHR(instance, &info, nullptr, surface);
++    if (err != VK_SUCCESS) {
++        fprintf(stderr, "H700: vkCreateDisplayPlaneSurfaceKHR failed: %d\n", (int)err);
++        return false;
++    }
++    printf("H700: created VK_KHR_display surface %ux%u\n",
++           info.imageExtent.width, info.imageExtent.height);
++    fflush(stdout);
++    return true;
++}
++#endif
++
+ MGG_GraphicsSystem* MGG_GraphicsSystem_Create()
+ {
+ #ifndef __APPLE__
+@@ -826,6 +1151,18 @@
+ 
+ 	std::vector<const char*> instanceExtensions;
+ #if defined(MG_SDL2)
++    if (MGVK_H700DirectDisplayEnabled())
++    {
++        if (!SupportsExtension(supportedInstanceExtensions, VK_KHR_SURFACE_EXTENSION_NAME) ||
++            !SupportsExtension(supportedInstanceExtensions, VK_KHR_DISPLAY_EXTENSION_NAME))
++        {
++            fprintf(stderr, "H700: VK_KHR_surface / VK_KHR_display unavailable\n");
++            return nullptr;
++        }
++        instanceExtensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
++        instanceExtensions.push_back(VK_KHR_DISPLAY_EXTENSION_NAME);
++    }
++    else
+ 	{
+ 		uint32_t count = 0;
+ 		if (SDL_Vulkan_GetInstanceExtensions(nullptr, &count, nullptr))
+@@ -916,6 +1253,42 @@
+ 			printf("Validation layers aren't supported (you might want to install the Vulkan SDK to support them).\n");
+ 	}
+ 
++
++#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
++    const char* validationLayer = "VK_LAYER_KHRONOS_validation";
++    if (!AreValidationLayersSupported())
++    {
++        __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "Layer not available in APK");
++        return nullptr;
++    }
++    if (std::none_of(enabledLayers.begin(), enabledLayers.end(), [validationLayer](const char* name) { return strcmp(name, validationLayer) == 0; }))
++        enabledLayers.push_back(validationLayer);
++
++    uint32_t validationExtensionCount = 0;
++    VkResult validationResult = vkEnumerateInstanceExtensionProperties(validationLayer, &validationExtensionCount, nullptr);
++    if (validationResult != VK_SUCCESS)
++    {
++        __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "Layer extension enumeration failed: %d", validationResult);
++        return nullptr;
++    }
++    std::vector<VkExtensionProperties> validationExtensions(validationExtensionCount);
++    validationResult = vkEnumerateInstanceExtensionProperties(validationLayer, &validationExtensionCount, validationExtensions.data());
++    if (validationResult != VK_SUCCESS ||
++        (!SupportsExtension(supportedInstanceExtensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) &&
++         !SupportsExtension(validationExtensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)))
++    {
++        __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "Debug utils extension unavailable: %d", validationResult);
++        return nullptr;
++    }
++    if (std::none_of(instanceExtensions.begin(), instanceExtensions.end(), [](const char* name) { return strcmp(name, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0; }))
++        instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
++
++    VkDebugUtilsMessengerCreateInfoEXT validationMessengerInfo = { VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
++    validationMessengerInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
++    validationMessengerInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
++    validationMessengerInfo.pfnUserCallback = MGVK_AndroidValidationCallback;
++#endif
++
+ 	VkInstanceCreateInfo instance_create_info = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
+ 	instance_create_info.pApplicationInfo = &app_info;
+ 	instance_create_info.enabledExtensionCount = instanceExtensions.size();
+@@ -923,6 +1296,51 @@
+ 	instance_create_info.enabledLayerCount = enabledLayers.size();
+ 	instance_create_info.ppEnabledLayerNames = enabledLayers.data();
+ 	instance_create_info.pNext = nullptr;
++#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
++    // Layer settings belong only to instance creation, not messenger creation.
++    const VkBool32 syncValidationEnabled = VK_TRUE;
++#if defined(VK_EXT_layer_settings)
++    const bool hasLayerSettings = SupportsExtension(validationExtensions, VK_EXT_LAYER_SETTINGS_EXTENSION_NAME) ||
++        SupportsExtension(supportedInstanceExtensions, VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
++    const VkLayerSettingEXT syncSetting = { validationLayer, "validate_sync", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &syncValidationEnabled };
++    VkLayerSettingsCreateInfoEXT syncSettings = { VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT };
++    syncSettings.pNext = &validationMessengerInfo;
++    syncSettings.settingCount = 1;
++    syncSettings.pSettings = &syncSetting;
++#else
++    const bool hasLayerSettings = false;
++#endif
++    const VkValidationFeatureEnableEXT syncFeature = VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
++    VkValidationFeaturesEXT syncFeatures = { VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT };
++    syncFeatures.pNext = &validationMessengerInfo;
++    syncFeatures.enabledValidationFeatureCount = 1;
++    syncFeatures.pEnabledValidationFeatures = &syncFeature;
++    const char* syncExtension = nullptr;
++#if defined(VK_EXT_layer_settings)
++    if (hasLayerSettings)
++    {
++        syncExtension = VK_EXT_LAYER_SETTINGS_EXTENSION_NAME;
++        instance_create_info.pNext = &syncSettings;
++    }
++#endif
++    if (!hasLayerSettings)
++    {
++        if (!SupportsExtension(validationExtensions, VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME) &&
++            !SupportsExtension(supportedInstanceExtensions, VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME))
++        {
++            __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "Synchronization validation extension unavailable");
++            return nullptr;
++        }
++        syncExtension = VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME;
++        instance_create_info.pNext = &syncFeatures;
++    }
++    if (std::none_of(instanceExtensions.begin(), instanceExtensions.end(), [syncExtension](const char* name) { return strcmp(name, syncExtension) == 0; }))
++        instanceExtensions.push_back(syncExtension);
++    // The vector may have reallocated when the validation extension was added.
++    instance_create_info.enabledExtensionCount = instanceExtensions.size();
++    instance_create_info.ppEnabledExtensionNames = instanceExtensions.data();
++    __android_log_print(ANDROID_LOG_INFO, "ETERVALE_VK_VALIDATION", "Synchronization validation requested via %s", syncExtension);
++#endif
+ 
+ 	VkInstance instance = VK_NULL_HANDLE;
+ 
+@@ -937,7 +1355,29 @@
+ 	volkLoadInstance(instance);
+ #endif
+ 
++
++#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
++    VkDebugUtilsMessengerEXT validationMessenger = VK_NULL_HANDLE;
++    if (!vkCreateDebugUtilsMessengerEXT || !vkDestroyDebugUtilsMessengerEXT)
++    {
++        __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "Debug messenger entry points unavailable");
++        vkDestroyInstance(instance, nullptr);
++        return nullptr;
++    }
++    validationResult = vkCreateDebugUtilsMessengerEXT(instance, &validationMessengerInfo, nullptr, &validationMessenger);
++    if (validationResult != VK_SUCCESS)
++    {
++        __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "Debug messenger creation failed: %d", validationResult);
++        vkDestroyInstance(instance, nullptr);
++        return nullptr;
++    }
++    __android_log_print(ANDROID_LOG_INFO, "ETERVALE_VK_VALIDATION", "VK_LAYER_KHRONOS_validation ACTIVE (14E.5, nonempty descriptor binds, async present)");
++#endif
++
+ 	auto system = new MGG_GraphicsSystem();
++#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
++	system->debugMessenger = validationMessenger;
++#endif
+ 	system->instance = instance;
+ 	system->supportsPhysicalDeviceProperties2EXT = supportsProperties2EXT;
+ 
+@@ -985,6 +1425,10 @@
+     // Destroy the Vulkan instance
+ 	if (system->instance)
+ 	{
++#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
++		if (system->debugMessenger != VK_NULL_HANDLE)
++			vkDestroyDebugUtilsMessengerEXT(system->instance, system->debugMessenger, nullptr);
++#endif
+ 		vkDestroyInstance(system->instance, nullptr);
+ 	}
+ 
+@@ -1198,11 +1642,22 @@
  	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
  	submitInfo.commandBufferCount = 1;
  	submitInfo.pCommandBuffers = &frame.commandBuffer;
@@ -529,7 +873,13 @@
  	{
  		std::lock_guard lock(device->queueMutex);
  		vkQueueSubmit(device->queue, 1, &submitInfo, renderFence);
-@@ -1221,6 +1413,21 @@
+ 	}
+-	vkWaitForFences(device->device, 1, &renderFence, VK_TRUE, UINT64_MAX);
++	MGVK_WaitForCompletedFence(device, renderFence, "flush frame commands");
+ 	vkDestroyFence(device->device, renderFence, nullptr);
+ }
+ 
+@@ -1221,6 +1676,21 @@
  	VK_SET_OBJECT_NAME(device->device, buffer->buffer, VK_OBJECT_TYPE_BUFFER, "MGG_Buffer.buffer");
  }
  
@@ -551,7 +901,7 @@
  static VkBufferUsageFlags ToUsage(MGBufferType type)
  {
  	VkBufferUsageFlags usage;
-@@ -1235,8 +1442,10 @@
+@@ -1235,11 +1705,84 @@
  	case MGBufferType::Constant:
  		return VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
  		break;
@@ -563,7 +913,128 @@
  	}
  }
  
-@@ -1298,6 +1507,7 @@
++// Transfer submission and retirement must not continue on an unsuccessful VkResult, even in Release.
++// Do not add a queue-wide wait to the frame path. A failed Vulkan call is fatal until device recovery exists.
++static void MGVK_RequireTransferSuccess(VkResult result, const char* operation)
++{
++    if (result == VK_SUCCESS)
++        return;
++#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
++    __android_log_print(ANDROID_LOG_ERROR, "ETERVALE_VK_VALIDATION", "transfer failure: %s VkResult=%d", operation, (int)result);
++#endif
++    fprintf(stderr, "Vulkan transfer failure: %s VkResult=%d\n", operation, (int)result);
++    std::abort();
++}
++
++// Older Mali drivers can report VK_TIMEOUT even for an infinite wait when a signal interrupts it.
++// Retry the same submitted fence, never reset/free a fence or its resources on timeout.
++// The Android wait uses finite slices and a bounded retry budget, not a queue-wide idle.
++static void MGVK_WaitForCompletedFence(MGG_GraphicsDevice* device, VkFence fence, const char* operation)
++{
++#if defined(__ANDROID__)
++    const auto start = std::chrono::steady_clock::now();
++    unsigned timeouts = 0;
++    for (;;)
++    {
++        const VkResult result = vkWaitForFences(device->device, 1, &fence, VK_TRUE, 1000000000ULL);
++        if (result == VK_SUCCESS)
++        {
++#if defined(ETERVALE_VK_VALIDATION)
++            if (timeouts != 0)
++                __android_log_print(ANDROID_LOG_INFO, "ETERVALE_VK_VALIDATION",
++                    "fence recovered: %s retries=%u", operation, timeouts);
++#endif
++            return;
++        }
++        if (result != VK_TIMEOUT)
++        {
++            MGVK_RequireTransferSuccess(result, operation);
++            return;
++        }
++        ++timeouts;
++#if defined(ETERVALE_VK_VALIDATION)
++        if (timeouts == 1)
++            __android_log_print(ANDROID_LOG_WARN, "ETERVALE_VK_VALIDATION",
++                "fence timeout: %s; retrying same fence", operation);
++#endif
++        if (std::chrono::steady_clock::now() - start >= std::chrono::seconds(30))
++        {
++            MGVK_RequireTransferSuccess(VK_TIMEOUT, operation);
++            return;
++        }
++        // Avoid a busy loop if the driver returns a timeout immediately.
++        std::this_thread::sleep_for(std::chrono::milliseconds(1));
++    }
++#else
++    MGVK_RequireTransferSuccess(vkWaitForFences(device->device, 1, &fence, VK_TRUE, UINT64_MAX), operation);
++#endif
++}
++
++struct MGVK_TransferDiagnosticScope
++{
++#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
++    const char* previous;
++    explicit MGVK_TransferDiagnosticScope(const char* path) : previous(MGVK_TransferDiagnosticPath)
++    {
++        MGVK_TransferDiagnosticPath = path;
++    }
++    ~MGVK_TransferDiagnosticScope() { MGVK_TransferDiagnosticPath = previous; }
++#else
++    explicit MGVK_TransferDiagnosticScope(const char*) {}
++#endif
++};
++
+ static VkCommandBuffer MGVK_BeginNewCommandBuffer(MGG_GraphicsDevice* device, VkCommandPool pool)
+ {
+ 	VkCommandBufferAllocateInfo allocInfo = {};
+@@ -1249,28 +1792,29 @@
+ 	allocInfo.commandBufferCount = 1;
+ 
+ 	VkCommandBuffer commandBuffer;
+-	vkAllocateCommandBuffers(device->device, &allocInfo, &commandBuffer);
++	MGVK_RequireTransferSuccess(vkAllocateCommandBuffers(device->device, &allocInfo, &commandBuffer), "allocate transfer command buffer");
+ 	VK_SET_OBJECT_NAME(device->device, commandBuffer, VK_OBJECT_TYPE_COMMAND_BUFFER, "MGVK_BeginNewCommandBuffer::commandBuffer");
+ 
+ 	VkCommandBufferBeginInfo beginInfo = {};
+ 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+ 	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+ 
+-	vkBeginCommandBuffer(commandBuffer, &beginInfo);
++	MGVK_RequireTransferSuccess(vkBeginCommandBuffer(commandBuffer, &beginInfo), "begin transfer command buffer");
+ 
+ 	return commandBuffer;
+ }
+ 
+ static void MGVK_ExecuteAndFreeCommandBuffer(MGG_GraphicsDevice* device, VkCommandBuffer commandBuffer, VkCommandPool pool)
+ {
+-	vkEndCommandBuffer(commandBuffer);
++	MGVK_TransferDiagnosticScope diagnostic("ExecuteAndFreeCommandBuffer");
++	MGVK_RequireTransferSuccess(vkEndCommandBuffer(commandBuffer), "end immediate transfer");
+ 
+ 	VkFence renderFence;
+ 	{
+ 		VkFenceCreateInfo fenceCreateInfo = {};
+ 		fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+ 		fenceCreateInfo.flags = 0;
+-		vkCreateFence(device->device, &fenceCreateInfo, nullptr, &renderFence);
++		MGVK_RequireTransferSuccess(vkCreateFence(device->device, &fenceCreateInfo, nullptr, &renderFence), "create immediate transfer fence");
+ 		VK_SET_OBJECT_NAME(device->device, renderFence, VK_OBJECT_TYPE_FENCE, "MGVK_ExecuteAndFreeCommandBuffer.renderFence");
+ 	}
+ 
+@@ -1282,10 +1826,10 @@
+ 		submitInfo.commandBufferCount = 1;
+ 		submitInfo.pCommandBuffers = &commandBuffer;
+ 
+-		vkQueueSubmit(device->queue, 1, &submitInfo, renderFence);
++		MGVK_RequireTransferSuccess(vkQueueSubmit(device->queue, 1, &submitInfo, renderFence), "submit immediate transfer");
+ 	}
+ 
+-	vkWaitForFences(device->device, 1, &renderFence, VK_TRUE, UINT64_MAX);
++	MGVK_WaitForCompletedFence(device, renderFence, "wait immediate transfer");
+ 	vkDestroyFence(device->device, renderFence, nullptr);
+ 
+ 	pool = pool ? pool : device->cmdPool;
+@@ -1298,6 +1842,7 @@
  	assert(adapter != nullptr);
  
  	auto device = new MGG_GraphicsDevice();
@@ -571,7 +1042,7 @@
  
  	device->instance = system->instance;
  	device->physicalDevice = adapter->device;
-@@ -1352,6 +1562,7 @@
+@@ -1352,6 +1897,7 @@
  	bool scalarBlockLayoutSupported = false;
  	bool hlslFunctionalitySupported = false;
  	bool userTypeSupported = false;
@@ -579,7 +1050,7 @@
  
  	for (const auto& extension : deviceExtensions)
  	{
-@@ -1365,6 +1576,8 @@
+@@ -1365,6 +1911,8 @@
  			hlslFunctionalitySupported = true;
  		if (strcmp(extension.extensionName, VK_GOOGLE_USER_TYPE_EXTENSION_NAME) == 0)
  			userTypeSupported = true;
@@ -588,7 +1059,7 @@
  	}
  
  	if (!swapChainSupported)
-@@ -1403,6 +1616,11 @@
+@@ -1403,6 +1951,11 @@
  	{
  		enabledFeatures.samplerAnisotropy = VK_TRUE;
  	}
@@ -600,7 +1071,44 @@
  
  	VkDeviceCreateInfo deviceCreateInfo = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
  	deviceCreateInfo.queueCreateInfoCount = 1;
-@@ -1438,6 +1656,24 @@
+@@ -1414,16 +1967,29 @@
+ 	VkPhysicalDeviceCustomBorderColorFeaturesEXT customBorderColorFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT };
+ 	if (device->customBorderColorSupported)
+ 	{
++		// The instance requests Vulkan 1.0, so use the enabled KHR extension entry point.
++		auto getFeatures2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2KHR>(
++			vkGetInstanceProcAddr(system->instance, "vkGetPhysicalDeviceFeatures2KHR"));
+ 		VkPhysicalDeviceCustomBorderColorFeaturesEXT supportedCbc = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT };
+-		VkPhysicalDeviceFeatures2 supportedFeatures2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
++		VkPhysicalDeviceFeatures2KHR supportedFeatures2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR };
+ 		supportedFeatures2.pNext = &supportedCbc;
+-		vkGetPhysicalDeviceFeatures2(device->physicalDevice, &supportedFeatures2);
++		if (getFeatures2)
++			getFeatures2(device->physicalDevice, &supportedFeatures2);
+ 
+-		extensions.push_back(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
+-		customBorderColorFeatures.customBorderColors = supportedCbc.customBorderColors;
+-		customBorderColorFeatures.customBorderColorWithoutFormat = supportedCbc.customBorderColorWithoutFormat;
+-		customBorderColorFeatures.pNext = lastFeature;
+-		lastFeature = &customBorderColorFeatures;
++		// The sampler path uses VK_FORMAT_UNDEFINED and requires both feature bits.
++		device->customBorderColorSupported = getFeatures2 && supportedCbc.customBorderColors && supportedCbc.customBorderColorWithoutFormat;
++		if (device->customBorderColorSupported)
++		{
++			extensions.push_back(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
++			customBorderColorFeatures.customBorderColors = VK_TRUE;
++			customBorderColorFeatures.customBorderColorWithoutFormat = VK_TRUE;
++			customBorderColorFeatures.pNext = lastFeature;
++			lastFeature = &customBorderColorFeatures;
++		}
++#if defined(__ANDROID__) && defined(ETERVALE_VK_VALIDATION)
++		__android_log_print(ANDROID_LOG_INFO, "ETERVALE_VK_VALIDATION", "Features2KHR available=%d; customBorderColor=%d",
++			getFeatures2 != nullptr, device->customBorderColorSupported);
++#endif
+ 	}
+ 	VkPhysicalDeviceScalarBlockLayoutFeatures scalarFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES };
+ 	if (scalarBlockLayoutSupported)
+@@ -1438,6 +2004,24 @@
  	if (userTypeSupported)
  		extensions.push_back(VK_GOOGLE_USER_TYPE_EXTENSION_NAME);
  
@@ -625,7 +1133,7 @@
  	VkPhysicalDeviceFeatures2 deviceFeatures2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
  	if (lastFeature != nullptr)
  	{
-@@ -1533,6 +1769,9 @@
+@@ -1533,6 +2117,9 @@
  		device->nullTexture[(int)MGTextureType::Cube] = tex;
  	}
  
@@ -635,10 +1143,92 @@
  	return device;
  }
  
-@@ -1645,6 +1884,14 @@
+@@ -1543,8 +2130,15 @@
+ 		vkQueueWaitIdle(device->queue);
+ 	}
+ 
+-	// Destroy all the frame resources.
++	// The backbuffer wrappers belong to this swapchain, not to the next one.
++	for (size_t i = 0; i < MGVK_NUM_TARGETS; i++)
++	{
++		if (device->targets.targets[i] && device->targets.targets[i]->isSwapchain)
++			device->targets.targets[i] = nullptr;
++	}
+ 	device->pipelineState.targets = nullptr;
++	device->renderTargetDirty = true;
++	device->pipelineStateDirty = true;
+ 
+ 	// Destroy framebuffers and render passes that are dependent on the swapchain.
+ 	// We iterate this way because we are removing elements from the map.
+@@ -1572,7 +2166,8 @@
+ 					return s.targets == targetSetCache;
+ 				});
+ 
+-			// This cache entry uses the swapchain, so it's safe to destroy.
++			// The framebuffer must release its attachment views before those views are destroyed.
++			vkDestroyFramebuffer(device->device, targetSetCache->framebuffer, nullptr);
+ 			for (int i = 0; i < MGVK_NUM_TARGETS; ++i)
+ 			{
+ 				auto& view = targetSetCache->arraySlicesViews[i];
+@@ -1581,7 +2176,6 @@
+ 				}
+ 			}
+ 			vkDestroyRenderPass(device->device, targetSetCache->renderPass, nullptr);
+-			vkDestroyFramebuffer(device->device, targetSetCache->framebuffer, nullptr);
+ 			delete targetSetCache;
+ 
+ 			// Erase the element and get an iterator to the next one.
+@@ -1595,13 +2189,7 @@
+ 		}
+ 	}
+ 
+-	if (device->swapchain != VK_NULL_HANDLE)
+-	{
+-		vkDestroySwapchainKHR(device->device, device->swapchain, nullptr);
+-		device->swapchain = VK_NULL_HANDLE;
+-	}
+-
+-	// Cleanup the swap chain images.
++	// Release the views and owned attachments before destroying the swapchain images.
+ 	for (size_t i = 0; i < device->swapchainCount; i++)
+ 	{
+ 		auto& swap = device->swapchains[i];
+@@ -1611,9 +2199,8 @@
+ 		if (chain == nullptr)
+ 			continue;
+ 
+-		// Note the image is freed by vkDestroySwapchainKHR.
++		// The swapchain owns the image; only its view belongs to this wrapper.
+ 		vkDestroyImageView(device->device, chain->target_view, nullptr);
+-		vmaFreeMemory(device->allocator, chain->allocation);
+ 
+ 		// Cleanup MSAA resolve image.
+ 		if (chain->msImage != nullptr)
+@@ -1631,6 +2218,12 @@
+ 
+ 		delete chain;
+ 	}
++
++	if (device->swapchain != VK_NULL_HANDLE)
++	{
++		vkDestroySwapchainKHR(device->device, device->swapchain, nullptr);
++		device->swapchain = VK_NULL_HANDLE;
++	}
+ }
+ 
+ void MGG_GraphicsDevice_Destroy(MGG_GraphicsDevice* device)
+@@ -1645,17 +2238,17 @@
  
  	MGVK_CleanupPendingTransfers(device);
  
+-	MGVK_CleanupSwapChain(device);
+-
+-	for (auto pair : device->shader_programs)
+-	{
+-		vkDestroyPipelineLayout(device->device, pair.second->layout, nullptr);
+-		delete pair.second;
+-	}
+-	device->shader_programs.clear();
 +	// Etervale fork: staging buffers of in-frame uploads and the frame capture's copies.
 +	for (auto& staged : device->frameStaging)
 +		vmaDestroyBuffer(device->allocator, staged.second.buffer, staged.second.allocation);
@@ -646,11 +1236,118 @@
 +	for (auto& slot : device->captureSlots)
 +		MGVK_ReleaseCaptureSlot(device, slot);
 +	device->captureSlots.clear();
-+
- 	MGVK_CleanupSwapChain(device);
  
- 	for (auto pair : device->shader_programs)
-@@ -1959,6 +2206,7 @@
+-	vkDestroyPipelineCache(device->device, device->pipelineCache, nullptr);
++	MGVK_CleanupSwapChain(device);
+ 
++	// Shader programs and pools are retired after all frame command buffers have been freed.
+ 	while (device->all_buffers.size() > 0)
+ 		MGG_Buffer_Destroy(device, device->all_buffers[0]);
+ 
+@@ -1677,11 +2270,23 @@
+ 	vkDestroyCommandPool(device->device, device->transferPool, nullptr);
+ 	vkDestroyCommandPool(device->device, device->cmdPool, nullptr);
+ 
++	// The existing device-idle wait has completed; no command buffer will reference these pools again.
++	MGVK_RetireShaders(device, true);
++	vkDestroyPipelineCache(device->device, device->pipelineCache, nullptr);
++
+ 	for (int i=0; i < 3; i++)
+ 		MGG_Texture_Destroy(device, device->nullTexture[i]);
+ 
+-	for (size_t i = 0; i < device->swapchainCount; i++)
+-		MGVK_DestroyFrameResources(device, i, true);
++	// No further draws are possible and the device is idle. Release the retired samplers even if they were bound.
++	memset(device->samplers, 0, sizeof(device->samplers));
++	// No further commands can use the owned texture bindings at final device teardown.
++	memset(device->textures, 0, sizeof(device->textures));
++	for (auto& stage : device->uavs)
++		for (auto& binding : stage)
++			binding = {};
++	device->targets = {};
++	// Also drain when the device was destroyed before a swapchain was created.
++	MGVK_DestroyFrameResources(device, device->frame, true);
+ 
+ 	if (device->surface != nullptr)
+ 		vkDestroySurfaceKHR(device->instance, device->surface, nullptr);
+@@ -1768,14 +2373,25 @@
+ 		if (device->surface != nullptr)
+ 			vkDestroySurfaceKHR(device->instance, device->surface, nullptr);
+ 
+-		if (!SDL_Vulkan_CreateSurface(sdl_window, device->instance, &device->surface))
+-		{
+-			printf("SDL_Vulkan_CreateSurface failed: %s\n", SDL_GetError());
+-			fflush(stdout);
+-
+-			device->surface = VK_NULL_HANDLE;
+-			return;
+-		}
++#if defined(__linux__)
++        if (MGVK_H700DirectDisplayEnabled())
++        {
++            if (!MGVK_CreateH700DisplaySurface(device->instance, device->physicalDevice,
++                                              &device->surface))
++            {
++                fprintf(stderr, "H700: display surface creation failed\n");
++                return;
++            }
++        }
++        else
++#endif
++        if (!SDL_Vulkan_CreateSurface(sdl_window, device->instance, &device->surface))
++        {
++            printf("SDL_Vulkan_CreateSurface failed: %s\n", SDL_GetError());
++            fflush(stdout);
++            device->surface = VK_NULL_HANDLE;
++            return;
++        }
+ 		VK_SET_OBJECT_NAME(device->device, (uint64_t)device->surface, VK_OBJECT_TYPE_SURFACE_KHR, "MGG_GraphicsDevice.surface");
+ 
+ 		device->window = sdl_window;
+@@ -1941,7 +2557,41 @@
+ 	create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+ 	create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+ 	create_info.preTransform = surface_capabilities.currentTransform;
+-	create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
++#if defined(__ANDROID__)
++    // The renderer uses the logical window orientation, not pre-rotated images.
++    // Ask the presentation engine to rotate them instead.
++    if (surface_capabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
++        create_info.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
++    __android_log_print(ANDROID_LOG_INFO, "ETERVALE_VK_ROTATION",
++        "requested=%ux%u; current=%ux%u; extent=%ux%u; transform=%u; preTransform=%u; supported=%u",
++        width, height, surface_capabilities.currentExtent.width, surface_capabilities.currentExtent.height,
++        extent.width, extent.height, static_cast<unsigned>(surface_capabilities.currentTransform),
++        static_cast<unsigned>(create_info.preTransform), static_cast<unsigned>(surface_capabilities.supportedTransforms));
++#endif
++	// The surface may only support INHERIT (for example on Android).
++	const VkCompositeAlphaFlagBitsKHR alphaModes[] = {
++		VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
++		VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
++		VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
++		VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR
++	};
++	for (auto mode : alphaModes)
++	{
++		if (surface_capabilities.supportedCompositeAlpha & mode)
++		{
++			create_info.compositeAlpha = mode;
++			break;
++		}
++	}
++	if (!create_info.compositeAlpha)
++	{
++		fprintf(stderr, "No supported swapchain composite alpha mode\n");
++		return;
++	}
++#if defined(__ANDROID__)
++	__android_log_print(ANDROID_LOG_INFO, "ETERVALE_VK_ROTATION", "compositeAlpha=%u; supportedCompositeAlpha=%u",
++		static_cast<unsigned>(create_info.compositeAlpha), static_cast<unsigned>(surface_capabilities.supportedCompositeAlpha));
++#endif
+ 	create_info.presentMode = selectedPresentMode;
+ 	create_info.clipped = VK_TRUE;
+ 	//create_info.pNext = &scalingCreateInfo;
+@@ -1959,6 +2609,7 @@
  	uint32_t swapchainCount = 0;
  	res = vkGetSwapchainImagesKHR(device->device, device->swapchain, &swapchainCount, NULL);
  	VK_CHECK_RESULT(res);
@@ -658,7 +1355,31 @@
  
  	// Do we need to change the number of swapchain images?  This can happen for various reasons
  	// including display changes and refresh rates.
-@@ -2181,6 +2429,41 @@
+@@ -1969,9 +2620,9 @@
+ 		{
+ 			for (size_t i = 0; i < device->swapchainCount; i++)
+ 			{
+-				// TODO: Should we wait for fences here or is vkDeviceWaitIdle enough?
+-
++				// The device is idle; the old command buffers will never be submitted again.
+ 				auto& frame = device->frames[i];
++				vkFreeCommandBuffers(device->device, device->cmdPool, 1, &frame.commandBuffer);
+ 				vkDestroySemaphore(device->device, frame.imageAcquiredSemaphore, nullptr);
+ 				vkDestroyFence(device->device, frame.completedFence, nullptr);
+ 				if (frame.uniforms)
+@@ -1990,9 +2641,10 @@
+ 		// safe to free all the descriptors and let them recreate
+ 		// on the next draw.  This removes all flicker caused by
+ 		// bad descriptor caches.
+-		MGVK_ProcessDescriptorCaches(device, 0);
++		MGVK_ProcessDescriptorCaches(device, device->frame, true);
+ 
+ 		device->swapchainCount = swapchainCount;
++		device->frameIndex = device->frame % device->swapchainCount;
+ 		device->freeFrames = device->swapchainCount + 1;
+ 
+ 		VkCommandBufferAllocateInfo comBufferInfo =
+@@ -2181,6 +2833,41 @@
  	bool isSwapchainBound = device->targets.targets[0] != nullptr &&
  		device->targets.targets[0]->isSwapchain;
  
@@ -690,7 +1411,7 @@
 +			std::lock_guard lock(device->queueMutex);
 +			vkQueueSubmit(device->queue, 1, &submitInfo, fence);
 +		}
-+		vkWaitForFences(device->device, 1, &fence, VK_TRUE, UINT64_MAX);
++		MGVK_WaitForCompletedFence(device, fence, "resize partial frame");
 +		vkDestroyFence(device->device, fence, nullptr);
 +		frame.is_recording = false;
 +	}
@@ -700,15 +1421,37 @@
  	MGVK_RecreateSwapChain(device, nativeWindowHandle, width, height, vkColor, vkDepth, multiSampleCount, syncInterval);
  
  	MGVK_PrepareFrame(device);
-@@ -2254,6 +2537,7 @@
- 		res = vkWaitForFences(device->device, 1, &frame.completedFence, VK_TRUE, UINT64_MAX);
- 		VK_CHECK_RESULT(res);
+@@ -2194,7 +2881,7 @@
+ }
+ 
+ 
+-static void MGVK_ProcessDescriptorCaches(MGG_GraphicsDevice* device, FrameCounter currentFrame)
++static void MGVK_ProcessDescriptorCaches(MGG_GraphicsDevice* device, FrameCounter currentFrame, bool all)
+ {
+ 	// Here we go thru the shaders and move any
+ 	// descriptors that haven't been used in a few
+@@ -2214,7 +2901,7 @@
+ 		for (; pair != usedSets.end();)
+ 		{
+ 			auto diff = currentFrame - pair->second->frame;
+-			if (diff < device->freeFrames)
++			if (!all && diff < device->freeFrames)
+ 			{
+ 				pair++;
+ 				continue;
+@@ -2251,9 +2938,9 @@
+ 	// Block and wait for the frame to be done rendering.
+ 	if (frame.is_rendering)
+ 	{
+-		res = vkWaitForFences(device->device, 1, &frame.completedFence, VK_TRUE, UINT64_MAX);
+-		VK_CHECK_RESULT(res);
++		MGVK_WaitForCompletedFence(device, frame.completedFence, "reuse frame slot");
  		frame.is_rendering = false;
 +		MGVK_CollectFrameCapture(device, device->frameIndex);
  	}
  
  	// Do we need to get the next swapchain image?
-@@ -2262,6 +2546,7 @@
+@@ -2262,6 +2949,7 @@
  		res = vkAcquireNextImageKHR(device->device, device->swapchain, UINT64_MAX,
  			frame.imageAcquiredSemaphore, VK_NULL_HANDLE, &frame.image_index);
  		VK_CHECK_RESULT(res);
@@ -716,9 +1459,12 @@
  	}
  
  	// This should be cleared by now.
-@@ -2279,6 +2564,21 @@
+@@ -2278,7 +2966,24 @@
+ 	MGVK_TryAcquireSwap(device, frame);
  
  	// Cleanup resources from the last time this frame was rendered.
++	// Only this boundary (after the slot fence) or final device teardown retires shaders.
++	MGVK_RetireShaders(device, false);
  	MGVK_ProcessDescriptorCaches(device, device->frame);
 +	MGVK_RecycleDiscardedBuffers(device);
 +
@@ -738,7 +1484,7 @@
  
  	// MGVK_DestroyFrameResources uses currentFrame and device->freeFrames to calculate age.
  	// We should pass the device->frame rather than swapchain_image_index.
-@@ -2328,7 +2628,9 @@
+@@ -2328,7 +3033,9 @@
  
  	auto targets = device->pipelineState.targets;
  
@@ -749,7 +1495,7 @@
  	{
  		for (int i = 0; i < targets->set.numTargets; i++)
  		{
-@@ -2354,7 +2656,7 @@
+@@ -2354,7 +3061,7 @@
  		if (clearStencil)
  			attachment->aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
  
@@ -758,7 +1504,7 @@
  		if (depthTexture) {
  			attachment->aspectMask &= DetermineAspectMask(depthTexture->info.format);
  		}
-@@ -2370,6 +2672,9 @@
+@@ -2370,6 +3077,9 @@
  		}
  	}
  
@@ -768,10 +1514,34 @@
  	VkClearRect rect;
  	rect.rect.offset.x = 0;
  	rect.rect.offset.y = 0;
-@@ -2410,6 +2715,75 @@
- 	device->pipelineState.targets = nullptr;
- }
+@@ -2394,20 +3104,95 @@
+ 			itr++;
+ 		else
+ 		{
++			// Framebuffer attachments must outlive their framebuffer.
++			vkDestroyFramebuffer(device->device, itr->second->framebuffer, nullptr);
+             for (int i = 0; i < MGVK_NUM_TARGETS; ++i) {
+                 auto& view = itr->second->arraySlicesViews[i];
+                 if (view.has_value()) {
+                     vkDestroyImageView(device->device, view.value(), nullptr);
+                 }
+             }
+-			vkDestroyFramebuffer(device->device, itr->second->framebuffer, nullptr);
+ 			vkDestroyRenderPass(device->device, itr->second->renderPass, nullptr);
++			if (device->pipelineState.targets == itr->second)
++			{
++				device->pipelineState.targets = nullptr;
++				device->renderTargetDirty = true;
++				device->pipelineStateDirty = true;
++			}
+ 			delete itr->second;
+ 			cache.erase(itr++);
+ 		}
+ 	}
  
+-	device->pipelineState.targets = nullptr;
++}
++
 +size_t MGVK_PipelineKeyHash::operator()(const MGVK_PipelineKey& key) const
 +{
 +	return MG_ComputeHash((const mgbyte*)&key, sizeof(MGVK_PipelineKey));
@@ -839,12 +1609,80 @@
 +	for (int i = 0; i < MGVK_NUM_TARGETS; i++)
 +		hash = MG_ComputeHash((mguint)set.arraySlices[i].value_or(-1), hash);
 +	return hash;
-+}
-+
+ }
+ 
  static void MGVK_DestroyPipelines(MGG_GraphicsDevice* device, std::function<bool(const MGVK_PipelineState&)> compare)
- {
- 	auto& pipelines = device->pipelines;
-@@ -2489,6 +2863,11 @@
+@@ -2421,6 +3206,8 @@
+ 			itr++;
+ 		else
+ 		{
++			if (device->lastGraphicsPipeline == itr->second.cache)
++				device->lastGraphicsPipeline = VK_NULL_HANDLE;
+ 			vkDestroyPipeline(device->device, itr->second.cache, nullptr);
+ 			pipelines.erase(itr++);
+ 		}
+@@ -2445,14 +3232,40 @@
+ 			delete buffer;
+ 		}
+ 
+-		while (!device->destroyTextures.empty())
++		// Etervale fork: check the retirement request and every kind of last use, not just sampling.
++		// Visit each queued texture once; an outstanding binding must not block other retirements.
++		const auto pendingTextureCount = device->destroyTextures.size();
++		for (size_t n = 0; n < pendingTextureCount; ++n)
+ 		{
+ 			auto texture = device->destroyTextures.front();
+-			auto diff = currentFrame - texture->frame;
+-			if (!free_all && diff < device->freeFrames)
+-				break;
+-
+ 			device->destroyTextures.pop();
++			bool bound = false;
++			for (int stage = 0; stage < (int)MGShaderStage::Count && !bound; ++stage)
++			{
++				for (int slot = 0; slot < MAX_TEXTURE_SLOTS; ++slot)
++					if (device->textures[stage][slot] == texture)
++						bound = true;
++				for (int slot = 0; slot < MGVK_MAX_UAV_SLOTS; ++slot)
++					if (device->uavs[stage][slot].texture == texture)
++						bound = true;
++			}
++			for (size_t slot = 0; slot < MGVK_NUM_TARGETS; ++slot)
++				if (device->targets.targets[slot] == texture)
++					bound = true;
++			if (bound)
++				texture->retireFrame = device->frame;
++
++			const auto recent = [device](FrameCounter frame)
++			{
++				return device->frame - frame < device->freeFrames;
++			};
++			if (bound || (!free_all && (recent(texture->retireFrame) || recent(texture->frame) ||
++				(texture->writeFrame != (FrameCounter)-1 && recent(texture->writeFrame)) ||
++				(texture->uploadFrame != (FrameCounter)-1 && recent(texture->uploadFrame)))))
++			{
++				device->destroyTextures.push(texture);
++				continue;
++			}
+ 
+ 			{
+ 				std::lock_guard lock(device->transferMutex);
+@@ -2485,10 +3298,26 @@
+ 				});
+ 			}
+ 
++			// The private depth attachment belongs to the parent render target and is not independently exposed.
++			// Retire it only after all framebuffers that refer to the parent have been destroyed.
++			if (texture->depthTexture)
++			{
++				auto depth = texture->depthTexture;
++				vkDestroyImageView(device->device, depth->target_view, nullptr);
++				vmaDestroyImage(device->allocator, depth->image, depth->allocation);
++				delete depth;
++				texture->depthTexture = nullptr;
++			}
++
+ 			if (texture->target_view != VK_NULL_HANDLE)
  				vkDestroyImageView(device->device, texture->target_view, nullptr);
  			if (texture->view != VK_NULL_HANDLE)
  				vkDestroyImageView(device->device, texture->view, nullptr);
@@ -856,7 +1694,7 @@
  
  			if (texture->msImage != VK_NULL_HANDLE)
  			{
-@@ -2514,6 +2893,13 @@
+@@ -2514,6 +3343,13 @@
  			device->destroyBlendStates.pop();
  
  			MGVK_DestroyPipelines(device, [state](const MGVK_PipelineState& s) { return s.blendState == state; });
@@ -870,7 +1708,7 @@
  			delete state;
  		}
  
-@@ -2527,6 +2913,13 @@
+@@ -2527,6 +3363,13 @@
  			device->destroyRasterizerStates.pop();
  
  			MGVK_DestroyPipelines(device, [state](const MGVK_PipelineState& s) { return s.rasterizerState == state; });
@@ -884,7 +1722,7 @@
  			delete state;
  		}
  
-@@ -2540,6 +2933,13 @@
+@@ -2540,13 +3383,43 @@
  			device->destroyDepthStencilStates.pop();
  
  			MGVK_DestroyPipelines(device, [state](const MGVK_PipelineState& s) { return s.depthStencilState == state; });
@@ -898,7 +1736,87 @@
  			delete state;
  		}
  
-@@ -2622,6 +3022,7 @@
+-		while (device->destroySamplers.size() > 0)
++		// Etervale fork: a sampler may still be referenced by a bound slot or a submitted descriptor set.
++		// Examine each queued sampler once; a still-bound one must not block unrelated retirements.
++		const auto pendingSamplerCount = device->destroySamplers.size();
++		for (size_t n = 0; n < pendingSamplerCount; ++n)
+ 		{
+ 			auto sampler = device->destroySamplers.front();
+ 			device->destroySamplers.pop();
++			bool bound = false;
++			for (int stage = 0; stage < (int)MGShaderStage::Count && !bound; ++stage)
++				for (int slot = 0; slot < MAX_TEXTURE_SLOTS; ++slot)
++					if (device->samplers[stage][slot] == sampler)
++					{
++						bound = true;
++						break;
++					}
++
++			if (bound)
++				sampler->retireFrame = device->frame;
++
++			// A swapchain-only teardown does not release a still-bound sampler. Device teardown clears the slots.
++			const auto age = device->frame - sampler->retireFrame;
++			if (bound || (!free_all && age < device->freeFrames))
++			{
++				device->destroySamplers.push(sampler);
++				continue;
++			}
++
+ 			vkDestroySampler(device->device, sampler->sampler, nullptr);
+ 			delete sampler;
+ 		}
+@@ -2555,6 +3428,7 @@
+ 
+ void MGVK_WaitPendingTransfers(MGG_GraphicsDevice* device, MGG_Texture* texture)
+ {
++	MGVK_TransferDiagnosticScope diagnostic("WaitPendingTransfers");
+ 	auto& transfers = device->pendingTransfers;
+ 
+ 	for (size_t i = 0; i < transfers.size();)
+@@ -2566,7 +3440,7 @@
+ 			continue;
+ 		}
+ 
+-		vkWaitForFences(device->device, 1, &pending.done, VK_TRUE, UINT64_MAX);
++		MGVK_WaitForCompletedFence(device, pending.done, "wait pending transfer");
+ 
+ 		vkFreeCommandBuffers(device->device, device->transferPool, 1, &pending.cmd);
+ 		vmaDestroyBuffer(device->allocator, pending.staging.buffer, pending.staging.allocation);
+@@ -2580,17 +3454,20 @@
+ 
+ void MGVK_CleanupPendingTransfers(MGG_GraphicsDevice* device)
+ {
++	MGVK_TransferDiagnosticScope diagnostic("CleanupPendingTransfers");
+ 	bool reset = false;
+ 	auto& transfers = device->pendingTransfers;
+ 	for (size_t i = 0; i < transfers.size(); )
+ 	{
+ 		auto& pending = transfers[i];
+-		VkResult res = vkGetFenceStatus(device->device, pending.done);
+-		if (res == VK_NOT_READY)
++		// Poll with zero timeout: this is non-blocking and only SUCCESS permits retirement.
++		VkResult res = vkWaitForFences(device->device, 1, &pending.done, VK_TRUE, 0);
++		if (res == VK_TIMEOUT)
+ 		{
+ 			i++;
+ 			continue;
+ 		}
++		MGVK_RequireTransferSuccess(res, "poll pending transfer");
+ 
+ 		vkFreeCommandBuffers(device->device, device->transferPool, 1, &pending.cmd);
+ 		vmaDestroyBuffer(device->allocator, pending.staging.buffer, pending.staging.allocation);
+@@ -2603,7 +3480,7 @@
+ 
+ 	if (reset && transfers.size() == 0)
+ 	{
+-		vkResetCommandPool(device->device, device->transferPool, VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT);
++		MGVK_RequireTransferSuccess(vkResetCommandPool(device->device, device->transferPool, VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT), "reset transfer pool");
+ 	}
+ }
+ 
+@@ -2622,6 +3499,7 @@
  	auto& swap = device->swapchains[frame.image_index];
  
  	MGVK_EndRenderPass(device, frame.commandBuffer);
@@ -906,7 +1824,7 @@
  
  	VkResult res;
  
-@@ -2633,11 +3034,11 @@
+@@ -2633,11 +3511,11 @@
  		frame.is_recording = false;
  
  		VkSemaphore waits[] = { frame.imageAcquiredSemaphore };
@@ -920,10 +1838,45 @@
  		submitInfo.pWaitSemaphores = waits;
  		submitInfo.pWaitDstStageMask = waitFlags;
  		submitInfo.commandBufferCount = 1;
-@@ -2686,28 +3087,18 @@
- 	frame.image_index = -1;
- 	frame.is_rendering = true;
+@@ -2645,6 +3523,7 @@
+ 		submitInfo.signalSemaphoreCount = 1;
+ 		submitInfo.pSignalSemaphores = &swap.renderCompleteSemaphore;
+ 		res = vkQueueSubmit(device->queue, 1, &submitInfo, frame.completedFence);
++		VK_CHECK_RESULT(res);
  
+ 		VkPresentInfoKHR presentInfo = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
+ 		presentInfo.waitSemaphoreCount = 1;
+@@ -2653,6 +3532,12 @@
+ 		presentInfo.pSwapchains = &device->swapchain;
+ 		presentInfo.pImageIndices = &frame.image_index;
+ 		res = vkQueuePresentKHR(device->queue, &presentInfo);
++#if defined(__ANDROID__) && !defined(ETERVALE_VK_VALIDATION)
++		// ETERVALE_ANDROID_RENDER_FENCE_PRESENT: serialize graphics, not the presentation queue.
++		// The submit fence covers rendering, but not consumption of the present semaphore.
++		// Present semaphores remain owned by swapchain images; reuse follows image acquisition.
++		MGVK_WaitForCompletedFence(device, frame.completedFence, "post-present baseline fence");
++#endif
+ 	}
+ 
+ 	// Cleanup any finished transfers as they may be
+@@ -2662,6 +3547,10 @@
+ 		MGVK_CleanupPendingTransfers(device);
+ 	}
+ 
++	// Record the submitted slot before recreation can invalidate its reference.
++	frame.image_index = -1;
++	frame.is_rendering = true;
++
+ 	if (res == VK_ERROR_OUT_OF_DATE_KHR)
+ 	{
+ 		// This will happen if the window is minimized too.
+@@ -2683,31 +3572,18 @@
+ 		VK_CHECK_RESULT(res);
+ 	}
+ 
+-	frame.image_index = -1;
+-	frame.is_rendering = true;
+-
 -	// Move the pending buffers to the free list
 -	// for reuse on the next frame.
 -	if (device->pending != nullptr)
@@ -959,7 +1912,7 @@
  	{
  		std::lock_guard lock(device->queueMutex);
  
-@@ -2787,6 +3178,7 @@
+@@ -2787,6 +3663,7 @@
  	viewport.height = height;
  	viewport.minDepth = minDepth;
  	viewport.maxDepth = maxDepth;
@@ -967,7 +1920,7 @@
  
  	auto& frame = device->frames[device->frameIndex];
  	assert(frame.is_recording);
-@@ -2804,6 +3196,7 @@
+@@ -2804,6 +3681,7 @@
  	scissor.extent.width = width;
  	scissor.extent.height = height;
  	device->scissorDirty = true;
@@ -975,7 +1928,7 @@
  }
  
  void MGG_GraphicsDevice_SetRenderTargets(MGG_GraphicsDevice* device, MGG_Texture** targets, mgint* arraySlices, mgint count)
-@@ -2846,6 +3239,8 @@
+@@ -2846,6 +3724,8 @@
  
  	device->pipelineStateDirty = true;
  	device->renderTargetDirty = true;
@@ -984,7 +1937,7 @@
  }
  
  void MGG_GraphicsDevice_SetConstantBuffer(MGG_GraphicsDevice* device, MGShaderStage stage, mgint slot, MGG_Buffer* buffer)
-@@ -2917,7 +3312,9 @@
+@@ -2917,7 +3797,9 @@
  	assert(shader->stage == stage);
  
  	device->shaders[(mgint)stage] = shader;
@@ -995,7 +1948,7 @@
  }
  
  void MGG_GraphicsDevice_SetInputLayout(MGG_GraphicsDevice* device, MGG_InputLayout* layout)
-@@ -2955,10 +3352,11 @@
+@@ -2955,10 +3837,11 @@
  	}
  	else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
  	{
@@ -1008,7 +1961,7 @@
  	}
  	else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
  	{
-@@ -3145,20 +3543,31 @@
+@@ -3145,20 +4028,31 @@
  			continue;
  		}
  
@@ -1043,7 +1996,7 @@
  
  		auto first = cached->set.targets[0];
  		assert(first);
-@@ -3175,7 +3584,10 @@
+@@ -3175,7 +4069,10 @@
  		int num_attachments = 0;
  		int num_color_attachments = 0;
  
@@ -1055,7 +2008,7 @@
  		{
  			auto target = cached->set.targets[i];
  			auto firstUse = cached->set.firstUse[i];
-@@ -3217,11 +3629,13 @@
+@@ -3217,11 +4114,13 @@
  
              if (isMsaa)
              {
@@ -1072,7 +2025,7 @@
  				desc.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
              }
              else
-@@ -3249,6 +3663,26 @@
+@@ -3249,6 +4148,26 @@
  			num_color_attachments++;
  		}
  
@@ -1099,7 +2052,7 @@
  		auto depth = cached->set.targets[0]->depthTexture;
  		if (depth)
  		{
-@@ -3304,8 +3738,9 @@
+@@ -3304,8 +4223,9 @@
              if (isMsaa)
                  subpass_desc.pResolveAttachments = &resolve_attachment_ref;
  
@@ -1110,7 +2063,7 @@
  
  			// Add subpass dependencies for proper synchronization
  			VkSubpassDependency dependencies[2];
-@@ -3360,8 +3795,9 @@
+@@ -3360,8 +4280,9 @@
  
  				dependencies[1].srcSubpass = 0;
  				dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
@@ -1122,7 +2075,7 @@
  				dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
  				dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
  				dependencies[1].dependencyFlags = 0;
-@@ -3386,7 +3822,7 @@
+@@ -3386,7 +4307,7 @@
  			VK_SET_OBJECT_NAME(device->device, cached->framebuffer, VK_OBJECT_TYPE_FRAMEBUFFER, "MGVK_TargetSetCache.framebuffer (hash: %u)", hash);
  		}
  
@@ -1131,7 +2084,7 @@
  	}
  
  	// Track our layout changes.
-@@ -3402,9 +3838,19 @@
+@@ -3402,9 +4323,19 @@
  	// Set the cache for the changed pipeline state.
  	device->pipelineState.targets = cached;
  
@@ -1154,7 +2107,7 @@
  
  	// Setup the render pass and pipeline.
  	VkRect2D render_area;
-@@ -3466,16 +3912,57 @@
+@@ -3466,16 +4397,57 @@
  	}
  }
  
@@ -1215,7 +2168,7 @@
  
  	// Apply the bindings to the new descriptor set.
  	auto& frame = device->frames[device->frameIndex];
-@@ -3488,7 +3975,12 @@
+@@ -3488,7 +4460,12 @@
  
  	MGVK_DescriptorInfo* info;
  
@@ -1229,7 +2182,7 @@
  	uint32_t hash = MG_ComputeHash(shader->uniformSlots);
  	hash = MG_ComputeHash(shader->textureSlots, hash);
  	uint32_t dirty = shader->textureSlots;
-@@ -3506,10 +3998,12 @@
+@@ -3506,10 +4483,12 @@
  			tex->frame = currentFrame;
  			hash = MG_ComputeHash(tex->id, hash);
  		}
@@ -1242,7 +2195,7 @@
  
  		// Early out if there are no more used slots.
  		dirty &= ~mask;
-@@ -3517,6 +4011,44 @@
+@@ -3517,6 +4496,44 @@
  			break;
  	}
  
@@ -1287,7 +2240,7 @@
  	// We hash the frameIndex because each frame in the swap chain has its
  	// own uniforms buffer (device->frames[frameIndex].uniforms) that gets
  	// bound to the descriptor set. If we don't, some frame will use the
-@@ -3527,8 +4059,18 @@
+@@ -3527,8 +4544,18 @@
  	// that we don't create twice as much descriptor due to this.
  	hash = MG_ComputeHash(device->frameIndex, hash);
  
@@ -1308,7 +2261,7 @@
  	if (!info)
  	{
  		// The descriptor wasn't cached... so we need to
-@@ -3545,7 +4087,8 @@
+@@ -3545,7 +4572,8 @@
  		shader->freeSets.pop();
  
  		// Cache the new or recycled set for later use.
@@ -1318,7 +2271,7 @@
  
  		for (int i = 0; i < shader->bindings.size(); i++)
  		{
-@@ -3579,6 +4122,25 @@
+@@ -3579,6 +4607,25 @@
  				else
  					((VkDescriptorImageInfo*)w.pImageInfo)->imageView = device->nullTexture[(int)shader->textureTypes[slot]]->view;
  			}
@@ -1344,7 +2297,7 @@
  			else
  			{
  				// This should never happen!
-@@ -3634,6 +4196,7 @@
+@@ -3634,6 +4681,7 @@
  		return program;
  
  	program = new MGVK_Program();
@@ -1352,7 +2305,7 @@
  	program->vertex = vertexShaderData;
  	program->pixel = pixelShaderData;
  
-@@ -3661,19 +4224,19 @@
+@@ -3661,19 +4709,19 @@
  
  static VkPipeline MGVK_CreatePipeline(MGG_GraphicsDevice* device)
  {
@@ -1379,7 +2332,7 @@
  
  	// We set the viewport and scissor dynamically.
  	static const VkDynamicState dynamicStates[] = {
-@@ -3734,7 +4297,7 @@
+@@ -3734,7 +4782,7 @@
  
  	// Setup the blend, rasterizer, and depth/stencil states.
  	VkPipelineColorBlendStateCreateInfo colorBlending = pstate.blendState->info;
@@ -1388,7 +2341,7 @@
  	pipelineInfo.pColorBlendState = &colorBlending;
  	pipelineInfo.pRasterizationState = &pstate.rasterizerState->info;
  	pipelineInfo.pDepthStencilState = &pstate.depthStencilState->info;
-@@ -3784,7 +4347,7 @@
+@@ -3784,7 +4832,7 @@
  	VK_CHECK_RESULT(res);
  	VK_SET_OBJECT_NAME(device->device, pipeline.cache, VK_OBJECT_TYPE_PIPELINE, "MGVK_PipelineCache.cache (hash: %u)", hash);
  
@@ -1397,7 +2350,7 @@
  
  	return pipeline.cache;
  }
-@@ -3793,10 +4356,15 @@
+@@ -3793,10 +4841,15 @@
  {
  	assert(device);
  
@@ -1417,7 +2370,7 @@
  
  	// Update the shader program.
  	if (device->shaderDirty)
-@@ -3824,11 +4392,14 @@
+@@ -3824,11 +4877,14 @@
  
  		auto pipeline = MGVK_CreatePipeline(device);
  		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
@@ -1432,7 +2385,7 @@
  		device->descriptorSets[0] = nullptr;
  		device->descriptorSets[1] = nullptr;
  		device->dynamicOffsets[0] = 0;
-@@ -3870,8 +4441,10 @@
+@@ -3870,8 +4926,10 @@
  		device->blendFactorDirty = false;
  	}
  
@@ -1445,7 +2398,20 @@
  	{
  		auto program = device->pipelineState.program;
  
-@@ -3906,6 +4479,8 @@
+@@ -3899,13 +4957,18 @@
+ 			MGVK_UpdateDescriptors(device, currentFrame, program->pixel, &device->descriptorSets[setCount++], dynamicOffset);
+ 		}
+ 
+-		// Bind the new descriptor sets.
+-		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+-			program->layout, setOffset, setCount, device->descriptorSets, offsetCount, device->dynamicOffsets);
++		// Shaders without resource bindings need no descriptor-set bind. Vulkan requires a nonzero count.
++		if (setCount > 0)
++		{
++			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
++				program->layout, setOffset, setCount, device->descriptorSets, offsetCount, device->dynamicOffsets);
++		}
+ 
  		// Clear all the dirty flags.
  		device->uniformsDirty = 0;
  		device->textureSamplerDirty = 0;
@@ -1454,7 +2420,7 @@
  	}
  
  	if (device->vertexBuffersDirty)
-@@ -3953,6 +4528,50 @@
+@@ -3953,6 +5016,50 @@
  	}
  }
  
@@ -1505,7 +2471,7 @@
  void MGG_GraphicsDevice_Draw(MGG_GraphicsDevice* device, MGPrimitiveType primitiveType, mgint vertexStart, mgint vertexCount)
  {
  	assert(device != nullptr);
-@@ -3964,6 +4583,7 @@
+@@ -3964,6 +5071,7 @@
  	auto& frame = device->frames[device->frameIndex];
  	assert(frame.is_recording);
  
@@ -1513,7 +2479,7 @@
  	MGVK_UpdateRenderPass(device, device->frame, frame.commandBuffer);
  
  	auto topology = ToVkPrimitiveTopology(primitiveType);
-@@ -3974,6 +4594,7 @@
+@@ -3974,6 +5082,7 @@
  	}
  
  	MGVK_UpdatePipeline(device, frame.commandBuffer, device->frame);
@@ -1521,7 +2487,7 @@
  
  	vkCmdDraw(frame.commandBuffer, vertexCount, 1, vertexStart, 0);
  }
-@@ -3991,6 +4612,7 @@
+@@ -3991,6 +5100,7 @@
  	auto& frame = device->frames[device->frameIndex];
  	assert(frame.is_recording);
  
@@ -1529,7 +2495,7 @@
  	MGVK_UpdateRenderPass(device, device->frame, frame.commandBuffer);
  
  	auto topology = ToVkPrimitiveTopology(primitiveType);
-@@ -4001,6 +4623,7 @@
+@@ -4001,6 +5111,7 @@
  	}
  
  	MGVK_UpdatePipeline(device, frame.commandBuffer, device->frame);
@@ -1537,7 +2503,7 @@
  
  	auto indexBuffer = device->indexBuffer;
  	assert(indexBuffer != nullptr);
-@@ -4034,6 +4657,7 @@
+@@ -4034,6 +5145,7 @@
  	auto& frame = device->frames[device->frameIndex];
  	assert(frame.is_recording);
  
@@ -1545,7 +2511,7 @@
  	MGVK_UpdateRenderPass(device, device->frame, frame.commandBuffer);
  
  	auto topology = ToVkPrimitiveTopology(primitiveType);
-@@ -4044,6 +4668,7 @@
+@@ -4044,6 +5156,7 @@
  	}
  
  	MGVK_UpdatePipeline(device, frame.commandBuffer, device->frame);
@@ -1553,7 +2519,16 @@
  
  	auto indexBuffer = device->indexBuffer;
  	assert(indexBuffer != nullptr);
-@@ -4419,7 +5044,7 @@
+@@ -4304,7 +5417,7 @@
+ 		std::lock_guard lock(device->queueMutex);
+ 		vkQueueSubmit(device->queue, 1, &flushSubmitInfo, flushFence);
+ 	}
+-	vkWaitForFences(device->device, 1, &flushFence, VK_TRUE, UINT64_MAX);
++	MGVK_WaitForCompletedFence(device, flushFence, "backbuffer readback");
+ 	vkDestroyFence(device->device, flushFence, nullptr);
+ 
+ 	auto srcImage = device->swapchains[frame.image_index].texture->image;
+@@ -4419,7 +5532,7 @@
  	case MGBlend::SourceAlphaSaturation:
  		return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
  	default:
@@ -1562,7 +2537,7 @@
  	}
  }
  
-@@ -4438,7 +5063,7 @@
+@@ -4438,7 +5551,7 @@
  	case MGBlendFunction::Max:
  		return VK_BLEND_OP_MAX;
  	default:
@@ -1571,7 +2546,7 @@
  	}
  }
  
-@@ -4473,7 +5098,7 @@
+@@ -4473,7 +5586,7 @@
  
  	// First check the cache.
  	uint32_t hash = MG_ComputeHash((mgbyte*)infos, sizeof(MGG_BlendState_Info) * 4);
@@ -1580,7 +2555,7 @@
  	if (cached)
  	{
  		cached->refs++;
-@@ -4499,8 +5124,10 @@
+@@ -4499,8 +5612,10 @@
  
  	state->refs = 1;
  	state->hash = hash;
@@ -1592,7 +2567,7 @@
  
  	return state;
  
-@@ -4521,7 +5148,7 @@
+@@ -4521,7 +5636,7 @@
  
  	// Queue the state for later destruction.
  	device->destroyBlendStates.push(state);
@@ -1601,7 +2576,7 @@
  }
  
  static VkCompareOp ToVkCompareOp(MGCompareFunction func)
-@@ -4545,7 +5172,7 @@
+@@ -4545,7 +5660,7 @@
  	case MGCompareFunction::NotEqual:
  		return VK_COMPARE_OP_NOT_EQUAL;
  	default:
@@ -1610,7 +2585,7 @@
  	}
  }
  
-@@ -4570,7 +5197,7 @@
+@@ -4570,7 +5685,7 @@
  	case MGStencilOperation::Invert:
  		return VK_STENCIL_OP_INVERT;
  	default:
@@ -1619,7 +2594,7 @@
  	}
  }
  
-@@ -4581,7 +5208,7 @@
+@@ -4581,7 +5696,7 @@
  
  	// First check the cache.
  	uint32_t hash = MG_ComputeHash((mgbyte*)info, sizeof(MGG_DepthStencilState_Info));
@@ -1628,7 +2603,7 @@
  	if (cached)
  	{
  		cached->refs++;
-@@ -4626,7 +5253,9 @@
+@@ -4626,7 +5741,9 @@
  
  	state->refs = 1;
  	state->hash = hash;
@@ -1639,7 +2614,7 @@
  
  	return state;
  }
-@@ -4646,7 +5275,7 @@
+@@ -4646,7 +5763,7 @@
  
  	// Queue the state for later destruction.
  	device->destroyDepthStencilStates.push(state);
@@ -1648,7 +2623,7 @@
  }
  
  static VkPolygonMode ToVkPolygonMode(MGFillMode mode)
-@@ -4658,7 +5287,7 @@
+@@ -4658,7 +5775,7 @@
  	case MGFillMode::WireFrame:
  		return VK_POLYGON_MODE_LINE;
  	default:
@@ -1657,7 +2632,7 @@
  	}
  }
  
-@@ -4673,7 +5302,7 @@
+@@ -4673,7 +5790,7 @@
  	case MGCullMode::CullCounterClockwiseFace:
  		return VK_CULL_MODE_BACK_BIT;
  	default:
@@ -1666,7 +2641,7 @@
  	}
  }
  
-@@ -4685,7 +5314,7 @@
+@@ -4685,7 +5802,7 @@
  
  	// First check the cache.
  	uint32_t hash = MG_ComputeHash((mgbyte*)info, sizeof(MGG_RasterizerState_Info));
@@ -1675,7 +2650,7 @@
  	if (cached)
  	{
  		cached->refs++;
-@@ -4716,7 +5345,9 @@
+@@ -4716,7 +5833,9 @@
  
  	state->refs = 1;
  	state->hash = hash;
@@ -1686,7 +2661,7 @@
  
  	return state;
  }
-@@ -4736,7 +5367,7 @@
+@@ -4736,7 +5855,7 @@
  
  	// Queue the state for later destruction.
  	device->destroyRasterizerStates.push(state);
@@ -1695,7 +2670,7 @@
  }
  
  static VkSamplerAddressMode ToVkSamplerAddressMode(MGTextureAddressMode mode)
-@@ -4752,7 +5383,7 @@
+@@ -4752,7 +5871,7 @@
  	case MGTextureAddressMode::Border:
  		return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
  	default:
@@ -1704,7 +2679,11 @@
  	}
  }
  
-@@ -4880,6 +5511,26 @@
+@@ -4877,9 +5996,30 @@
+ 	if (!state)
+ 		return;
+ 
++	state->retireFrame = device->frame;
  	device->destroySamplers.push(state);
  }
  
@@ -1731,7 +2710,7 @@
  static MGG_Buffer* MGVK_BufferDiscard(MGG_GraphicsDevice* device, MGG_Buffer* buffer)
  {
  	// Get the info we need to find/allocate a new buffer.
-@@ -4922,6 +5573,7 @@
+@@ -4922,6 +6062,7 @@
  		*best = buffer->next;
  		buffer->next = nullptr;
  		buffer->dataSize = dataSize;
@@ -1739,7 +2718,7 @@
  		//buffer->dirtyMin = 0;
  		//buffer->dirtyMax = 0;
  		return buffer;
-@@ -4944,6 +5596,30 @@
+@@ -4944,6 +6085,30 @@
  	buffer->actualSize = buffer->dataSize = sizeInBytes;
  	buffer->type = type;
  
@@ -1770,7 +2749,7 @@
  	if (type == MGBufferType::Constant && !no_push)
  	{
  		// Uniform buffers never use real buffers.  We just
-@@ -5091,14 +5767,25 @@
+@@ -5091,14 +6256,25 @@
  		return;
  	}
  
@@ -1798,7 +2777,7 @@
  
  		// Fix any active mapping of the buffer that
  		// was just discarded for another.
-@@ -5138,6 +5825,32 @@
+@@ -5138,6 +6314,32 @@
  	MGVK_BufferCopyAndFlush(device, buffer, offset, data, elementCount, elementSizeInBytes, vertexStride);
  }
  
@@ -1831,7 +2810,7 @@
  void MGG_Buffer_GetData(MGG_GraphicsDevice* device, MGG_Buffer* buffer, mgint offset, mgbyte* data, mgint dataCount, mgint dataBytes, mgint dataStride)
  {
      assert(device != nullptr);
-@@ -5170,6 +5883,17 @@
+@@ -5170,6 +6372,17 @@
      }
  }
  
@@ -1849,7 +2828,7 @@
  MGG_Texture* MGG_Texture_Create(
  	MGG_GraphicsDevice* device,
  	MGTextureType type,
-@@ -5180,6 +5904,40 @@
+@@ -5180,6 +6393,40 @@
  	mgint mipmaps,
  	mgint slices)
  {
@@ -1890,7 +2869,7 @@
  	assert(device != nullptr);
  
  	assert(width > 0);
-@@ -5193,6 +5951,7 @@
+@@ -5193,6 +6440,7 @@
  	texture->type = type;
  	texture->format = format;
  	texture->id = ++device->currentTextureId;
@@ -1898,7 +2877,7 @@
  
  	VkImageCreateInfo& create_info = texture->info;
  	create_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-@@ -5208,6 +5967,8 @@
+@@ -5208,6 +6456,8 @@
  	create_info.samples = VK_SAMPLE_COUNT_1_BIT;
  	create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
  	create_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -1907,7 +2886,7 @@
  	create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
  	create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
  
-@@ -5288,10 +6049,20 @@
+@@ -5288,10 +6538,20 @@
                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                          VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                          VK_IMAGE_USAGE_TRANSFER_DST_BIT;
@@ -1929,7 +2908,33 @@
  		mggCreateImage(device, &create_info, texture);
  		VK_SET_OBJECT_NAME(device->device, texture->image, VK_OBJECT_TYPE_IMAGE, "MGG_Texture.image (RenderTarget id: %llu)", texture->id);
  
-@@ -5496,6 +6267,27 @@
+@@ -5376,12 +6636,12 @@
+ 	if (!texture)
+ 		return;
+ 
+-	if (texture->depthTexture)
+-		MGG_Texture_Destroy(device, texture->depthTexture);
+-
+ 	// If this is an externally owned texture (like an external swapchain or image wrapped in a RenderTarget2D).
+ 	if (texture->isExternal && texture->allocation == VK_NULL_HANDLE)
+ 	{
++		// Keep the existing external-wrapper contract; owned targets retire their depth with the parent.
++		if (texture->depthTexture)
++			MGG_Texture_Destroy(device, texture->depthTexture);
+ 		// Wait for the device to be idle to safely destroy views before the external caller destroys the underlying VkImage.
+ 		vkDeviceWaitIdle(device->device);
+ 
+@@ -5430,7 +6690,8 @@
+ 		return;
+ 	}
+ 
+-	// Queue the texture for later destruction.
++	// Queue the texture for later destruction; a recent upload or write may not have been submitted yet.
++	texture->retireFrame = device->frame;
+ 	device->destroyTextures.push(texture);
+ }
+ 
+@@ -5496,6 +6757,27 @@
  	memcpy(dest, data, dataBytes);
  	vmaUnmapMemory(device->allocator, buffer.allocation);
  
@@ -1957,7 +2962,30 @@
  	// Get a command buffer and fill it... only one thread at a time
  	// can do this.  Eventually we could have multiple transfer pools.
  	MGVK_Transfer transfer;
-@@ -5556,12 +6348,22 @@
+@@ -5517,10 +6799,11 @@
+ 		VkFenceCreateInfo fenceCreateInfo = {};
+ 		fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+ 		fenceCreateInfo.flags = 0;
+-		vkCreateFence(device->device, &fenceCreateInfo, nullptr, &transfer.done);
++		MGVK_TransferDiagnosticScope diagnostic("TextureSetDataTransfer");
++		MGVK_RequireTransferSuccess(vkCreateFence(device->device, &fenceCreateInfo, nullptr, &transfer.done), "create texture upload fence");
+ 		VK_SET_OBJECT_NAME(device->device, transfer.done, VK_OBJECT_TYPE_FENCE, "MGVK_Transfer.done");
+ 
+-		vkEndCommandBuffer(cmd);
++		MGVK_RequireTransferSuccess(vkEndCommandBuffer(cmd), "end texture upload");
+ 
+ 		std::lock_guard lock2(device->queueMutex);
+ 		VkSubmitInfo submit = {};
+@@ -5529,7 +6812,7 @@
+ 		submit.commandBufferCount = 1;
+ 		submit.pCommandBuffers = &cmd;
+ 		submit.signalSemaphoreCount = 0;
+-		vkQueueSubmit(device->queue, 1, &submit, transfer.done);
++		MGVK_RequireTransferSuccess(vkQueueSubmit(device->queue, 1, &submit, transfer.done), "submit texture upload");
+ 
+ 		device->pendingTransfers.push_back(transfer);
+ 	}
+@@ -5556,12 +6839,22 @@
  
  	if (texture->isTarget)
  	{
@@ -1981,7 +3009,7 @@
  
  	MGG_Buffer buffer;
  	MGVK_BufferCreate(device, dataBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_CPU_ONLY, &buffer);
-@@ -5587,6 +6389,127 @@
+@@ -5587,6 +6880,127 @@
  		MGVK_BeginCommandBuffer(frame.commandBuffer);
  }
  
@@ -2109,7 +3137,7 @@
  MGG_InputLayout* MGG_InputLayout_Create(
  	MGG_GraphicsDevice* device,
  	MGG_Shader* vertexShader,
-@@ -5603,6 +6526,7 @@
+@@ -5603,6 +7017,7 @@
  	assert(elementCount >= 0);
  
  	auto layout = new MGG_InputLayout();
@@ -2117,7 +3145,7 @@
  
  	layout->bindings.resize(streamCount);
  	for (int i = 0; i < streamCount; i++)
-@@ -5619,7 +6543,11 @@
+@@ -5619,7 +7034,11 @@
  		const auto element = elements[i];
  		auto& attrib = layout->attributes[i];
  
@@ -2130,7 +3158,7 @@
  		attrib.binding = element.VertexBufferSlot;
  		attrib.format = ToVkFormat(element.Format);
  		attrib.offset = element.AlignedByteOffset;
-@@ -5642,9 +6570,42 @@
+@@ -5642,9 +7061,42 @@
  	if (layout == nullptr)
  		return;
  
@@ -2173,7 +3201,7 @@
  MGG_Shader* MGG_Shader_Create(MGG_GraphicsDevice* device, MGShaderStage stage, mgbyte* bytecode, mgint sizeInBytes)
  {
  	assert(device != nullptr);
-@@ -5676,6 +6637,22 @@
+@@ -5676,6 +7128,22 @@
  		sizeInBytes -= sizeof(VkDescriptorSetLayoutBinding) * count;
  	}
  
@@ -2196,7 +3224,7 @@
  	VkShaderModuleCreateInfo create_info = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
  	create_info.codeSize = sizeInBytes;
  	create_info.pCode = (uint32_t*)bytecode;
-@@ -5703,9 +6680,18 @@
+@@ -5703,9 +7171,18 @@
  		shader->poolInfo = nullptr;
  		shader->pool = nullptr;
  		shader->writes = nullptr;
@@ -2215,7 +3243,7 @@
  	VkDescriptorSetLayoutCreateInfo layoutInfo;
  	memset(&layoutInfo, 0, sizeof(layoutInfo));
  	layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-@@ -5743,15 +6729,61 @@
+@@ -5743,15 +7220,61 @@
  	// Pre-fill the free descriptor sets now.
  	MGVK_FillDescriptorSetCache(device, shader);
  
@@ -2281,7 +3309,7 @@
  		{
  			bufferInfo->buffer = NULL;
  			bufferInfo->offset = 0;
-@@ -5814,6 +6846,7 @@
+@@ -5814,16 +7337,43 @@
  		}
  	}
  
@@ -2289,25 +3317,130 @@
  	return shader;
  }
  
-@@ -5825,6 +6858,17 @@
- 	if (!shader)
- 		return;
+-void MGG_Shader_Destroy(MGG_GraphicsDevice* device, MGG_Shader* shader)
++// Only called after the retirement interval, or after command-buffer destruction at device shutdown.
++static void MGVK_DestroyShaderNow(MGG_GraphicsDevice* device, MGG_Shader* shader)
+ {
+-	assert(device != nullptr);
+-	assert(shader != nullptr);
++	// Destroy the dependent graphics pipelines before their programs/layouts and the shader's descriptors.
++	for (auto it = device->shader_programs.begin(); it != device->shader_programs.end();)
++	{
++		auto program = it->second;
++		if (program->vertex != shader && program->pixel != shader)
++		{
++			++it;
++			continue;
++		}
++		MGVK_DestroyPipelines(device, [program](const MGVK_PipelineState& state) { return state.program == program; });
++		if (device->pipelineState.program == program)
++		{
++			device->pipelineState.program = nullptr;
++			device->shaderDirty = true;
++			device->pipelineStateDirty = true;
++			memset(device->descriptorSets, 0, sizeof(device->descriptorSets));
++			memset(device->dynamicOffsets, 0, sizeof(device->dynamicOffsets));
++		}
++		vkDestroyPipelineLayout(device->device, program->layout, nullptr);
++		delete program;
++		it = device->shader_programs.erase(it);
++	}
  
-+	// Etervale fork: a compute shader's pipeline may still run in a frame in flight; effects are disposed rarely, so the
-+	// device is waited once rather than the pipeline queued for later destruction.
+-	if (!shader)
+-		return;
 +	if (shader->computePipeline != VK_NULL_HANDLE)
 +	{
-+		vkDeviceWaitIdle(device->device);
++		if (device->lastComputePipeline == shader->computePipeline)
++			device->lastComputePipeline = VK_NULL_HANDLE;
 +		vkDestroyPipeline(device->device, shader->computePipeline, nullptr);
 +		vkDestroyPipelineLayout(device->device, shader->computeLayout, nullptr);
-+		if (device->shaders[(mgint)MGShaderStage::Compute] == shader)
-+			device->shaders[(mgint)MGShaderStage::Compute] = nullptr;
 +	}
-+
+ 
  	delete [] shader->bufferInfo;
  	delete [] shader->imageInfo;
- 	delete [] shader->writes;
-@@ -6107,3 +7151,744 @@
+@@ -5844,9 +7394,10 @@
+ 		delete free;
+ 	}
+ 
++	// Pool destruction releases the sets before their layout and module are destroyed.
++	if (shader->pool != VK_NULL_HANDLE)
++		vkDestroyDescriptorPool(device->device, shader->pool, nullptr);
+ 	vkDestroyDescriptorSetLayout(device->device, shader->setLayout, nullptr);
+-
+-	vkDestroyDescriptorPool(device->device, shader->pool, nullptr);
+ 	if (shader->poolInfo)
+ 	{
+ 		delete [] shader->poolInfo->pPoolSizes;
+@@ -5859,6 +7410,59 @@
+ 	delete shader;
+ }
+ 
++void MGG_Shader_Destroy(MGG_GraphicsDevice* device, MGG_Shader* shader)
++{
++	assert(device != nullptr);
++	assert(shader != nullptr);
++	if (!shader)
++		return;
++
++	// Do not invalidate a recorded command buffer or mutate the shader/program caches here.
++	std::lock_guard lock(device->shaderRetirementMutex);
++	if (!shader->retirementRequested)
++	{
++		device->retiredShaders.push(shader);
++		shader->retirementRequested = true;
++	}
++}
++
++static void MGVK_RetireShaders(MGG_GraphicsDevice* device, bool shutdown)
++{
++	std::lock_guard lock(device->shaderRetirementMutex);
++	if (shutdown)
++	{
++		// All command buffers are gone. Release even shaders that were never explicitly disposed.
++		memset(device->shaders, 0, sizeof(device->shaders));
++		while (!device->retiredShaders.empty())
++			device->retiredShaders.pop();
++		while (!device->all_shaders.empty())
++			MGVK_DestroyShaderNow(device, device->all_shaders.back());
++		return;
++	}
++
++	const auto pending = device->retiredShaders.size();
++	for (size_t n = 0; n < pending; ++n)
++	{
++		auto shader = device->retiredShaders.front();
++		device->retiredShaders.pop();
++		bool bound = false;
++		for (int stage = 0; stage < (int)MGShaderStage::Count; ++stage)
++			if (device->shaders[stage] == shader)
++				bound = true;
++		if (!shader->retirementStarted || bound)
++		{
++			shader->retirementStarted = true;
++			shader->retireFrame = device->frame;
++		}
++		if (bound || device->frame - shader->retireFrame < device->freeFrames)
++		{
++			device->retiredShaders.push(shader);
++			continue;
++		}
++		MGVK_DestroyShaderNow(device, shader);
++	}
++}
++
+ MGG_OcclusionQuery* MGG_OcclusionQuery_Create(MGG_GraphicsDevice* device)
+ {
+ 	assert(device != nullptr);
+@@ -5940,7 +7544,7 @@
+ 		VK_CHECK_RESULT(vkQueueSubmit(device->queue, 1, &submitInfo, fence));
+ 	}
+ 
+-    VK_CHECK_RESULT(vkWaitForFences(device->device, 1, &fence, VK_TRUE, UINT64_MAX));
++    MGVK_WaitForCompletedFence(device, fence, "occlusion query flush");
+     vkDestroyFence(device->device, fence, nullptr);
+ 
+ 	MGVK_BeginCommandBuffer(frame.commandBuffer);
+@@ -6107,3 +7711,752 @@
  	handles->QueueFamilyIndex = static_cast<mgint>(device->graphicsQueueFamily);
  	handles->QueueIndex       = 0;
  }
@@ -2422,9 +3555,16 @@
 +{
 +	assert(device != nullptr);
 +	auto& frame = device->frames[device->frameIndex];
-+	// vkCmdResetQueryPool is not allowed inside a render pass, and ending one here would change its load/store.
-+	if (!frame.is_recording || device->inRenderPass)
++	// vkCmdResetQueryPool is forbidden inside a render pass. A pending target switch
++	// already requires the old pass to end (MGVK_UpdateRenderPass); close it now.
++	if (!frame.is_recording)
 +		return false;
++	if (device->inRenderPass)
++	{
++		if (!device->renderTargetDirty)
++			return false;
++		MGVK_EndRenderPass(device, frame.commandBuffer);
++	}
 +	vkCmdResetQueryPool(frame.commandBuffer, (VkQueryPool)pool, first, count);
 +	return true;
 +}
@@ -2887,6 +4027,7 @@
 +//   presented waited for it (--check-compute: one 45 ms frame; none with the dedicated allocation).
 +static void MGVK_UploadStorageOffThread(MGG_GraphicsDevice* device, MGG_Buffer* buffer, mgint offset, mgbyte* data, mgint dataBytes)
 +{
++	MGVK_TransferDiagnosticScope diagnostic("UploadStorageOffThread");
 +	VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
 +	bufferInfo.size = (VkDeviceSize)dataBytes;
 +	bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -2918,23 +4059,22 @@
 +	VK_CHECK_RESULT(res);
 +	VkCommandBufferBeginInfo beginInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
 +	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-+	vkBeginCommandBuffer(cmd, &beginInfo);
++	MGVK_RequireTransferSuccess(vkBeginCommandBuffer(cmd, &beginInfo), "begin worker storage upload");
 +	MGVK_RecordStorageUpload(cmd, buffer, staging.buffer, offset, dataBytes);
-+	vkEndCommandBuffer(cmd);
++	MGVK_RequireTransferSuccess(vkEndCommandBuffer(cmd), "end worker storage upload");
 +
 +	VkFenceCreateInfo fenceInfo = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
 +	VkFence done;
-+	vkCreateFence(device->device, &fenceInfo, nullptr, &done);
++	MGVK_RequireTransferSuccess(vkCreateFence(device->device, &fenceInfo, nullptr, &done), "create worker storage fence");
 +	VK_SET_OBJECT_NAME(device->device, done, VK_OBJECT_TYPE_FENCE, "MGG_Buffer_SetStorageData.offThreadDone");
 +	{
 +		std::lock_guard lock(device->queueMutex);
 +		VkSubmitInfo submit = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
 +		submit.commandBufferCount = 1;
 +		submit.pCommandBuffers = &cmd;
-+		res = vkQueueSubmit(device->queue, 1, &submit, done);
-+		VK_CHECK_RESULT(res);
++		MGVK_RequireTransferSuccess(vkQueueSubmit(device->queue, 1, &submit, done), "submit worker storage upload");
 +	}
-+	vkWaitForFences(device->device, 1, &done, VK_TRUE, UINT64_MAX);
++	MGVK_WaitForCompletedFence(device, done, "wait worker storage upload");
 +
 +	vkDestroyFence(device->device, done, nullptr);
 +	vkDestroyCommandPool(device->device, pool, nullptr);
@@ -2975,22 +4115,23 @@
 +	}
 +
 +	std::lock_guard lock(device->transferMutex);
++	MGVK_TransferDiagnosticScope diagnostic("BufferSetStorageDataTransfer");
 +	MGVK_Transfer transfer;
 +	transfer.owner = nullptr;
 +	transfer.cmd = MGVK_BeginNewCommandBuffer(device, device->transferPool);
 +	transfer.staging = staging;
 +	MGVK_RecordStorageUpload(transfer.cmd, buffer, staging.buffer, offset, dataBytes);
-+	vkEndCommandBuffer(transfer.cmd);
++	MGVK_RequireTransferSuccess(vkEndCommandBuffer(transfer.cmd), "end storage transfer");
 +
 +	VkFenceCreateInfo fenceInfo = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-+	vkCreateFence(device->device, &fenceInfo, nullptr, &transfer.done);
++	MGVK_RequireTransferSuccess(vkCreateFence(device->device, &fenceInfo, nullptr, &transfer.done), "create storage transfer fence");
 +	VK_SET_OBJECT_NAME(device->device, transfer.done, VK_OBJECT_TYPE_FENCE, "MGG_Buffer_SetStorageData.done");
 +	{
 +		std::lock_guard lock2(device->queueMutex);
 +		VkSubmitInfo submit = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
 +		submit.commandBufferCount = 1;
 +		submit.pCommandBuffers = &transfer.cmd;
-+		vkQueueSubmit(device->queue, 1, &submit, transfer.done);
++		MGVK_RequireTransferSuccess(vkQueueSubmit(device->queue, 1, &submit, transfer.done), "submit storage transfer");
 +	}
 +	device->pendingTransfers.push_back(transfer);
 +}
@@ -3054,15 +4195,105 @@
 +}
 --- a/native/monogame/sdl/MGP_sdl.cpp
 +++ b/native/monogame/sdl/MGP_sdl.cpp
-@@ -7,6 +7,7 @@
+@@ -7,6 +7,11 @@
  #include "mg_common.h"
  
  #include <SDL.h>
++#if defined(__ANDROID__)
++#include <SDL_vulkan.h>
++void Etervale_Android_RecordTouch(const SDL_Event& e);
++#endif
 +#include <cstdlib>
  
  #if _WIN32
  #include <combaseapi.h>
-@@ -1066,6 +1067,21 @@
+@@ -433,6 +438,11 @@
+ 
+     while (SDL_PollEvent(&ev) == 1)
+     {
++#if defined(__ANDROID__)
++        Etervale_Android_RecordTouch(ev);
++        if (ev.type == SDL_MOUSEMOTION && ev.motion.which == SDL_TOUCH_MOUSEID) continue;
++        if ((ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEBUTTONUP) && ev.button.which == SDL_TOUCH_MOUSEID) continue;
++#endif
+         // TODO: We cannot call SDL_GetTicks64 as it is different from
+         // SDL_GetTicks() and controller and keyboard events return SDL_GetTicks().
+         event_.Timestamp = SDL_GetTicks();
+@@ -650,6 +660,16 @@
+                 event_.Type = MGEventType::WindowResized;
+                 event_.Window.Data1 = ev.window.data1;
+                 event_.Window.Data2 = ev.window.data2;
++#if defined(__ANDROID__)
++                if (auto* window = SDL_GetWindowFromID(ev.window.windowID))
++                {
++                    int width = 0, height = 0;
++                    SDL_Vulkan_GetDrawableSize(window, &width, &height);
++                    if (width > 0 && height > 0) { event_.Window.Data1 = width; event_.Window.Data2 = height; }
++                    SDL_Log("ETERVALE_SDL_RESIZE event=%dx%d; drawable=%dx%d; forwarded=%dx%d",
++                        ev.window.data1, ev.window.data2, width, height, event_.Window.Data1, event_.Window.Data2);
++                }
++#endif
+                 return true;
+                 break;
+             case SDL_WINDOWEVENT_FOCUS_GAINED:
+@@ -794,7 +814,13 @@
+ 	Uint32 flags = SDL_WINDOW_HIDDEN;// | SDL_WINDOW_FULLSCREEN_DESKTOP;
+ 
+ #if defined(MG_VULKAN) || defined(MG_DIRECTX12)
+-	flags |= SDL_WINDOW_VULKAN;
++    // ETERVALE_H700_DIRECT_DISPLAY: SDL dummy provides events/window handle;
++    // Vulkan creates a direct-display surface independently of SDL WSI.
++#if defined(__linux__)
++    const char* h700 = std::getenv("MG_H700_DIRECT_DISPLAY");
++    if (!(h700 && h700[0] == '1' && h700[1] == '\0'))
++#endif
++        flags |= SDL_WINDOW_VULKAN;
+ #elif defined(MG_OPENGL)
+ 
+     if (!MGP_Window_DetectOpenGLVersion(window->contextMajorVersion, window->contextMinorVersion))
+@@ -830,8 +856,41 @@
+ 
+     title = title ? title : "";
+ 
++#if defined(__ANDROID__)
++    // ETERVALE_ANDROID_SDL_INITIAL_SIZE_V19: MonoGame's initial 800x480
++    // should not determine the Android SDL window's native size.
++    const int initialRequestWidth = width;
++    const int initialRequestHeight = height;
++    SDL_DisplayMode androidDisplay = {};
++    if (SDL_GetCurrentDisplayMode(0, &androidDisplay) == 0 &&
++        androidDisplay.w > 0 && androidDisplay.h > 0)
++    {
++        width = androidDisplay.w;
++        height = androidDisplay.h;
++        SDL_Log("ETERVALE_SDL_WINDOW v19: initial=%dx%d; display=%dx%d",
++                initialRequestWidth, initialRequestHeight, width, height);
++    }
++    else
++    {
++        SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO,
++                    "ETERVALE_SDL_WINDOW v19: display mode unavailable; initial=%dx%d; SDL error=%s",
++                    initialRequestWidth, initialRequestHeight, SDL_GetError());
++    }
++#endif
++
+ 	window->window = SDL_CreateWindow((const char*)title, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, flags);
+ 
++#if defined(__ANDROID__)
++    if (window->window != nullptr)
++    {
++        int createdWidth = 0;
++        int createdHeight = 0;
++        SDL_GetWindowSize(window->window, &createdWidth, &createdHeight);
++        SDL_Log("ETERVALE_SDL_WINDOW v19: created=%dx%d; requested=%dx%d",
++                createdWidth, createdHeight, width, height);
++    }
++#endif
++
+ 	if (window->window == nullptr)
+ 	{
+ 		printf("SDL_CreateWindow failed: %s\n", SDL_GetError());
+@@ -1066,6 +1125,21 @@
  	SDL_SetWindowBordered(window->window, borderless ? SDL_FALSE : SDL_TRUE);
  }
  
@@ -3084,7 +4315,7 @@
  void MGP_Window_SetTitle(MGP_Window* window, const char* title)
  {
      assert(window != nullptr);
-@@ -1078,6 +1094,15 @@
+@@ -1078,6 +1152,15 @@
  {
  	assert(window != nullptr);
  

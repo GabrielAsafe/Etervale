@@ -94,6 +94,7 @@ public sealed partial class PristonRenderer : IDisposable
     private uint _renderTime => _renderClock.Milliseconds;
     private bool _disposed;
     private bool _m143GpuTimerAttempted;
+    private bool _mobileGpuProbe;
     private readonly PristonDayNightCycle _dayNight = new();
 
     // Stage lamps (Shaders/Lighting/Shading.hlsli): the illuminance at the reference distance (150 units), in units of the
@@ -622,7 +623,14 @@ public sealed partial class PristonRenderer : IDisposable
     // Opaque and Masked (with the motion and depth targets of the temporal anti-aliasing), Transparent, Glow. The HDR
     // scene stays bound after Draw so effects can add to it; ComposeScene then runs the post chain (Temporal, Exposure,
     // Bloom, DisplayTransform, PostAntiAliasing) into the caller's target.
-    public void Draw(PristonCamera camera)
+    public void Draw(PristonCamera camera) => Draw(camera, 100);
+
+    public Point SceneRenderSize => new(_sceneTargets.Width, _sceneTargets.Height);
+
+    internal static bool ShouldUseDepthPrepass(bool supported, bool skipOptional, bool temporal, bool needsDepth) =>
+        supported && (!skipOptional || temporal || needsDepth);
+
+    public void Draw(PristonCamera camera, int sceneScalePercent, bool skipOptionalDepthPrepass = false, bool profileGpu = false)
     {
         _lodFrustum.Matrix = camera.View * camera.Projection;
         _lodFocus = camera.Target;
@@ -637,12 +645,14 @@ public sealed partial class PristonRenderer : IDisposable
         var twoSidedBatches = 0;
         var visibleStaticMeshDiagnostics = new PristonMeshDiagnostics();
         var temporal = _postSettings.AntiAliasing == AntiAliasingMode.Taa && DebugView != PristonDebugView.Overdraw;
-        // The depth pre-pass pays for itself: the lit pass shades each pixel once and the light tiles get depth bounds.
-        var prepass = !_h700Lite && _multiSampleCount == 0 && DebugView != PristonDebugView.Overdraw;
+        // Keep the original pre-pass by default, and retain it for effects that depend on scene depth.
+        var supportsPrepass = !_h700Lite && _multiSampleCount == 0 && DebugView != PristonDebugView.Overdraw;
+        var needsDepth = _ambientOcclusion || _contactShadows || _screenReflections || _volumetricLight;
+        var prepass = ShouldUseDepthPrepass(supportsPrepass, skipOptionalDepthPrepass, temporal, needsDepth);
         // Binding the scene target ends the caller's render pass, so the profiler can reset its timestamps outside one.
-        _sceneTargets.Begin(_multiSampleCount, temporal, prepass);
-        // M1.4.3 GPU timings are opt-in and only started on the rendering thread.
-        if (!_m143GpuTimerAttempted && Environment.GetEnvironmentVariable("ETV_FOREST_GPU_TIMERS") == "1")
+        _sceneTargets.Begin(_multiSampleCount, temporal, prepass, sceneScalePercent);
+        _mobileGpuProbe = profileGpu;
+        if (!_m143GpuTimerAttempted && (profileGpu || Environment.GetEnvironmentVariable("ETV_FOREST_GPU_TIMERS") == "1"))
         {
             _m143GpuTimerAttempted = true;
             try
@@ -656,6 +666,10 @@ public sealed partial class PristonRenderer : IDisposable
             }
         }
         Profiler.BeginFrame();
+        if (_mobileGpuProbe && Profiler.GpuTimersAvailable)
+        {
+            Profiler.Begin(RenderSection.SceneTotal);
+        }
         Profiler.Begin(RenderSection.Frame);
         EnsureBatchLists();
         _batchUploader.BeginFrame();
@@ -982,7 +996,13 @@ public sealed partial class PristonRenderer : IDisposable
             default,
             _lastDeltaSeconds,
             DebugView == PristonDebugView.ExposureFalseColour);
+        var finishGpuProbe = _mobileGpuProbe && Profiler.GpuTimersAvailable && _sceneTargets.Active;
         _sceneTargets.Compose(postFrame, _temporalFrame, Profiler);
+        if (finishGpuProbe)
+        {
+            Profiler.End(RenderSection.SceneTotal);
+            Profiler.FinishGpuFrame();
+        }
         _stateCache.InvalidateDeviceState();
         _motionFrame++;
     }

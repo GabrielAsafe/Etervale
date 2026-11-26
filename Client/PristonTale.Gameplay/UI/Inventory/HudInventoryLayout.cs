@@ -14,12 +14,15 @@ public static class HudInventoryLayout
     // Which owned items lie on the bag grid, for HudGridPlacement.
     public static readonly Func<OwnedItemView, bool> InBag = static item => item.InBag;
 
-    // ETERVALE_MOBILE_SAFE_GRID_SHORTCUTS_V34: centrar desenho e hit-testing do inventário no mesmo ponto.
-    internal static Point MobileOrigin(HudLayout layout, int slideOffset = 0) =>
-        new(Math.Max(0,(layout.Width-HudLayout.DesignWidth)/2),
-            (layout.Height-200)/2-400+slideOffset);
-    public static Point Origin(HudLayout layout, int slideOffset = 0) =>
-        OperatingSystem.IsAndroid()?MobileOrigin(layout,slideOffset):new Point(0,layout.BottomOffset+slideOffset);
+    public static Point Origin(HudLayout layout, int slideOffset = 0) => new(0, layout.BottomOffset + slideOffset);
+
+    // The inventory, status and skill windows share the 800 by 200 artwork in the 800 by 600 design canvas.
+    internal static Point CenteredPanelOrigin(HudLayout layout, int slideOffset = 0)
+    {
+        var window = Window(Point.Zero);
+        return new Point((layout.Width - window.Width) / 2 - window.X,
+            (layout.Height - window.Height) / 2 - window.Y + slideOffset);
+    }
 
     public static Rectangle Bag(Point origin) => new(origin.X + 23, origin.Y + 436, Columns * HudGridPlacement.CellSize, Rows * HudGridPlacement.CellSize);
 

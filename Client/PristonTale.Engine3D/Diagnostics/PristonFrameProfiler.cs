@@ -30,7 +30,8 @@ public enum RenderSection
     LightCulling,
     Environment,
     Reflections,
-    Volumetric
+    Volumetric,
+    SceneTotal
 }
 
 // Per-section CPU time of every frame and, once enabled, GPU time from Vulkan timestamps written into the frame's own
@@ -49,6 +50,7 @@ public sealed class PristonFrameProfiler : IDisposable
     private readonly double[] _gpuSum = new double[SectionCount];
     private readonly int[] _gpuCount = new int[SectionCount];
     private readonly bool[] _issued = new bool[Latency * SectionCount];
+    private readonly bool[] _gpuStarted = new bool[SectionCount];
     private GpuTimestampPool _queries;
     private bool _slotTimed;
     private int _slot;
@@ -57,6 +59,7 @@ public sealed class PristonFrameProfiler : IDisposable
 
     public bool GpuTimersAvailable => _queries is not null;
     public int GpuResultsMissed { get; private set; }
+    public int GpuResetMissed { get; private set; }
 
     public static IReadOnlyList<RenderSection> Sections { get; } = Enum.GetValues<RenderSection>();
 
@@ -101,8 +104,13 @@ public sealed class PristonFrameProfiler : IDisposable
         }
 
         Array.Clear(_issued, _slot * SectionCount, SectionCount);
+        Array.Clear(_gpuStarted);
         // Vulkan resets queries only outside a render pass; a frame that begins inside one stays untimed.
         _slotTimed = _queries.Reset(_slot * SectionCount * 2, SectionCount * 2);
+        if (!_slotTimed)
+        {
+            GpuResetMissed++;
+        }
         _frame++;
     }
 
@@ -111,7 +119,13 @@ public sealed class PristonFrameProfiler : IDisposable
         var index = (int)section;
         if (_queries is not null && _frameOpen && _slotTimed && SubmitsGpuWork(section))
         {
-            _queries.Write((_slot * SectionCount + index) * 2);
+            var query = _slot * SectionCount + index;
+            // A Vulkan timestamp must not be written twice without a reset.
+            if (!_issued[query] && !_gpuStarted[index])
+            {
+                _queries.Write(query * 2);
+                _gpuStarted[index] = true;
+            }
         }
 
         _cpuBegin[index] = Stopwatch.GetTimestamp();
@@ -121,11 +135,12 @@ public sealed class PristonFrameProfiler : IDisposable
     {
         var index = (int)section;
         _cpuFrame[index] += Stopwatch.GetElapsedTime(_cpuBegin[index]).TotalMilliseconds;
-        if (_queries is not null && _frameOpen && _slotTimed && SubmitsGpuWork(section))
+        if (_queries is not null && _frameOpen && _slotTimed && _gpuStarted[index])
         {
             var query = _slot * SectionCount + index;
             _queries.Write(query * 2 + 1);
             _issued[query] = true;
+            _gpuStarted[index] = false;
         }
     }
 
@@ -146,6 +161,17 @@ public sealed class PristonFrameProfiler : IDisposable
         return _gpuCount[index] > 0 ? _gpuSum[index] / _gpuCount[index] : 0d;
     }
 
+    // The mobile probe ends at composition; portrait/UI calls cannot overwrite that frame's query pairs.
+    public void FinishGpuFrame() => _slotTimed = false;
+
+    public int GpuSampleCount(RenderSection section) => _gpuCount[(int)section];
+
+    public string GpuSampleSummary(RenderSection section)
+    {
+        var count = GpuSampleCount(section);
+        return count == 0 ? "n/a" : FormattableString.Invariant($"{GpuMean(section):F1}/{count}");
+    }
+
     public void ResetAverages()
     {
         Array.Clear(_cpuSum);
@@ -153,6 +179,7 @@ public sealed class PristonFrameProfiler : IDisposable
         Array.Clear(_gpuSum);
         Array.Clear(_gpuCount);
         GpuResultsMissed = 0;
+        GpuResetMissed = 0;
     }
 
     public Dictionary<string, double> CpuMeans() => Means(CpuMean, _cpuFrames);

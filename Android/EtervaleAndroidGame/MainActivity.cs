@@ -4,6 +4,7 @@ using Android.Content.PM;
 using Android.OS;
 using Android.Util;
 using Android.Widget;
+using PristonTale.Engine3D.Diagnostics;
 
 [assembly: UsesPermission(Android.Manifest.Permission.Internet)]
 
@@ -15,6 +16,7 @@ public sealed class MainActivity : Activity
 {
     protected override void OnCreate(Bundle? savedInstanceState)
     {
+        MobileDiagnosticTrace.Start(static (tag, message) => Android.Util.Log.Info(tag, message));
         base.OnCreate(savedInstanceState);
 
         var column = new LinearLayout(this)
@@ -40,6 +42,7 @@ public sealed class MainActivity : Activity
         column.AddView(start);
         column.AddView(status);
         SetContentView(column);
+        MobileDiagnosticTrace.Mark("launcher_view_set");
 
         // ETERVALE_ANDROID_V6_AUTO_START
         // Arrancar automaticamente, sem exigir um toque no botao do bootstrap.
@@ -51,26 +54,33 @@ public sealed class MainActivity : Activity
         start.Click += async (_, _) =>
         {
             start.Enabled = false;
+            MobileDiagnosticTrace.Mark("auto_start_clicked");
             status.Text = "A iniciar Game1 (Etervale 3D)...";
             try
             {
                 // O game loop SDL/Vulkan deve correr numa thread propria.
                 // ETERVALE_ANDROID_CONTENT_V3
                 EtervaleAndroidContentProvider.Configure(this);
+                MobileDiagnosticTrace.Mark("content_provider_configured");
                 // ETERVALE_ANDROID_V5
                 PristonTale.Gameplay.UI.LoginPanel.AndroidKeyboardRequested = EtervaleAndroidSoftKeyboard.SetVisible;
                 PristonTale.Gameplay.UI.Chat.HudChat.AndroidKeyboardRequested = EtervaleAndroidSoftKeyboard.SetVisible;
                 string androidSettingsPath = EtervaleAndroidStartup.PrepareSettings(this);
+                MobileDiagnosticTrace.Mark("settings_prepared");
                 // ETERVALE_ANDROID_SDL_BRIDGE_V2
                 // Abre a Activity SDL que cria SurfaceView, contexto JNI e janela nativa.
                 // Espera inicializacao da Activity antes de entrar no Game1.Run().
                 var intent = new Intent();
                 intent.SetClassName(PackageName!, "org.libsdl.app.EtervaleSDLActivity");
                 StartActivity(intent);
+                MobileDiagnosticTrace.Mark("sdl_activity_start_returned");
                 await Task.Delay(1200); // primeira prova; substituir por sinal de surface-ready
+                MobileDiagnosticTrace.Mark("sdl_fixed_delay_finished");
                 await Task.Run(() =>
                 {
+                    MobileDiagnosticTrace.Mark("game_constructor_begin");
                     using var game = new PristonTale.Game1(androidSettingsPath);
+                    MobileDiagnosticTrace.Mark("game_run_begin");
                     game.Run();
                 });
                 status.Text = "Game1 terminou.";

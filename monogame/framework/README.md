@@ -68,3 +68,6 @@ Every change is marked `Etervale fork` in the source and has a document in `../i
   (`StorageKind`, `StorageInfo`), the thread group size and the requirements (`ShaderRequirements`; a ray-query shader
   is refused with `NotSupportedException` until the runtime binds acceleration structures);
   `EffectParameterType.AccelerationStructure`.
+
+- Android serial presentation defers graphics-resource finalizers to the graphics-device boundary; see
+  [issue 020](../issues/020-android-native-finalizers.md). Desktop finalization is unchanged.

@@ -91,8 +91,10 @@ public sealed class GameClient : IDisposable
         }
 
         H700Mark("inicio LoadContent");
+        MobileDiagnosticTrace.Mark("bootstrap_begin");
         _spriteBatch = new SpriteBatch(_graphicsDevice);
         var font = _content.Load<SpriteFont>("Fonts/UI");
+        MobileDiagnosticTrace.Mark("ui_font_loaded");
         _font = font;
         if (Environment.GetEnvironmentVariable("ETERVALE_H700_LAZY_BOOT") == "1")
         {
@@ -103,6 +105,7 @@ public sealed class GameClient : IDisposable
         _uiAtlas = HudAtlas.LoadBootstrap(_graphicsDevice, _assetRoot, ConsoleClientLog.Instance);
         _cursor = HudCursor.Load(_graphicsDevice, _assetRoot, ConsoleClientLog.Instance);
         H700Mark("depois HUD e cursor");
+        MobileDiagnosticTrace.Mark("hud_cursor_loaded");
         if (System.Environment.GetEnvironmentVariable("ETERVALE_H700_SKIP_SKY") == "1")
         {
             ConsoleClientLog.Instance.Warn("[H700] Sky bootstrap ignorado para poupar RAM.");
@@ -113,6 +116,7 @@ public sealed class GameClient : IDisposable
             _sky = PristonSkyLibrary.LoadBootstrap(_graphicsDevice, _assetRoot, ConsoleClientLog.Instance);
         }
         H700Mark("antes de VFX");
+        MobileDiagnosticTrace.Mark("sky_bootstrap_finished");
         if (System.Environment.GetEnvironmentVariable("ETERVALE_H700_SKIP_VFX") == "1")
         {
             ConsoleClientLog.Instance.Warn("[H700] VFX bootstrap ignorado.");
@@ -124,9 +128,11 @@ public sealed class GameClient : IDisposable
                 _graphicsDevice, _content, _assetRoot, ConsoleClientLog.Instance);
         }
         H700Mark("depois de VFX");
+        MobileDiagnosticTrace.Mark("effects_bootstrap_finished");
         _audio = PristonAudioLibrary.LoadBootstrap(_assetRoot, ConsoleClientLog.Instance);
         _audio.ApplySettings(_presentation.Requested);
         H700Mark("depois audio");
+        MobileDiagnosticTrace.Mark("audio_bootstrap_finished");
         _backend = new GameServerConnection(_serverAddress);
         _context = new ScreenContext(
             _graphicsDevice,
@@ -143,11 +149,14 @@ public sealed class GameClient : IDisposable
             _effects,
             _audio,
             RenewBackend);
+        _context.ToggleDiagnostics = ToggleDiagnostics;
         _displayConfirmation = new DisplayConfirmation(_context);
         // First screen: the opening / authentication scene (the login form overlays it next).
         H700Mark("antes OpeningScreen");
+        MobileDiagnosticTrace.Mark("opening_enter_begin");
         SetScreen(new OpeningScreen(_context));
         H700Mark("depois OpeningScreen");
+        MobileDiagnosticTrace.Mark("opening_enter_finished");
     }
 
     public bool HandleEscape() => _screen?.HandleEscape() == true;
@@ -156,6 +165,8 @@ public sealed class GameClient : IDisposable
     // the top left over everything.
     public bool DiagnosticsShown { get; set; }
     public string Diagnostics { get; set; } = string.Empty;
+
+    public void ToggleDiagnostics() => DiagnosticsShown = !DiagnosticsShown;
 
     // A character from the window's text input (the chat line reads it).
     public void TypeCharacter(char value) => _context?.TypedText.Push(value);
@@ -275,6 +286,15 @@ public sealed class GameClient : IDisposable
         ConsoleClientLog.Instance.Info($"[H700 LAZY] {stage}; RSS={rss} MiB; heap={heap} MiB");
     }
 
+    // Centre the measured text block, keeping a margin on both sides even when it needs to shrink.
+    internal static (Vector2 Position, float Scale) MobileDiagnosticsPlacement(int width, int height, Vector2 textSize)
+    {
+        const float usableFraction = 0.88f;
+        var scale = Math.Min(1f, Math.Min(width * usableFraction / Math.Max(1f, textSize.X), height * usableFraction / Math.Max(1f, textSize.Y)));
+        var position = (new Vector2(width, height) - textSize * scale) * 0.5f;
+        return (position, scale);
+    }
+
     private void DrawDiagnostics()
     {
         if (!DiagnosticsShown || Diagnostics.Length == 0)
@@ -282,9 +302,17 @@ public sealed class GameClient : IDisposable
             return;
         }
 
+        var position = new Vector2(8f, 8f);
+        var scale = 1f;
+        if (OperatingSystem.IsAndroid())
+        {
+            var viewport = _graphicsDevice.Viewport;
+            (position, scale) = MobileDiagnosticsPlacement(viewport.Width, viewport.Height, _font.MeasureString(Diagnostics));
+        }
+
         _spriteBatch.Begin();
-        _spriteBatch.DrawString(_font, Diagnostics, new Vector2(9f, 9f), Color.Black);
-        _spriteBatch.DrawString(_font, Diagnostics, new Vector2(8f, 8f), Color.White);
+        _spriteBatch.DrawString(_font, Diagnostics, position + Vector2.One, Color.Black, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+        _spriteBatch.DrawString(_font, Diagnostics, position, Color.White, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
         _spriteBatch.End();
     }
 
