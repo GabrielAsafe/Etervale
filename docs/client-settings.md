@@ -104,6 +104,7 @@ renderer through `PresentationSettings.ApplyRendering` and apply at once.
 | `shadowUpdateRate` | int Hz, `60` | 0, 30, 60, 120 | yes (Shadow animation: 30, 60, 120, every frame) | Sun cascade refit and refresh rate; 0 every frame. Far cascades refresh less often; at night the rate is halved (at least 30 Hz). The two near cascades redraw every frame regardless, so characters cast from their current pose. |
 | `lampShadowCount` | int, `4` | 0, 2, 4 | | Stage lamps nearest the focus whose cube shadows actors and animated props cast, while the lamps are lit (sun below about 4 degrees). |
 | `lampShadowTileSize` | int, `512` | 256, 512, 1024 | | Cube-face size of each lamp shadow. |
+| `depthPrepass` | bool, `true` | | | Keep the pre-pass even with no configured depth-dependent effects. `false` permits skipping it in shaded, non-TAA, non-MSAA scenes when AO, contact shadows, SSR and volumetric light are all off. Soft particles and light-tile depth bounds are unavailable when it is skipped. Quality presets leave this preference unchanged. |
 | `ambientOcclusion` | bool, `true` | | | Half-resolution GTAO from the depth pre-pass (not with MSAA). |
 | `contactShadows` | bool, `true` | | | Screen-space contact shadows toward the sun (by day only, not by moonlight; not with MSAA). |
 | `imageBasedLighting` | bool, `true` | | | Sky-dome irradiance (spherical harmonics) and prefiltered reflections, refreshed every 250 ms; `false`: hemispherical sky/ground ambient. |

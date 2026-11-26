@@ -187,7 +187,7 @@ checks.
 | 5 | `SkyCapture` | fog on, sky visible, sky changed | Four 32-px tiles of the dome for the fog colour. |
 | 6 | `Environment` | IBL on, every 250 ms | Six dome faces, SH irradiance, octahedral map, prefiltered atlas. |
 | 7 | `Sky` | always | Dome layers into the sky target (sRGB codes in half floats), then `SkyComposite` fills every scene target. |
-| 8 | `Prepass` | no MSAA, not `Overdraw` | Depth, linear depth, normals (smoothness in alpha), motion of opaque surfaces and cut-outs. |
+| 8 | `Prepass` | no MSAA, not `Overdraw`; preference on, TAA, development view or configured depth effect | Depth, linear depth, normals (smoothness in alpha), motion of opaque surfaces and cut-outs. |
 | 9 | `AmbientOcclusion` | pre-pass ran and AO or contact shadows on | GTAO and contact shadows at half resolution, blur. |
 | 10 | `LightCulling` | any local light | 16x16 tile masks (depth-bounded after the pre-pass). |
 | - | (outline) | an actor with `SetActorOutline` | `DrawOutlines`: the actor flat in one colour, shifted 1.4 px scaled by the screen height over 600 (times the outline strength) in four directions, pushed back 16 units and writing depth, so the lit actor covers it and only a rim stays. |

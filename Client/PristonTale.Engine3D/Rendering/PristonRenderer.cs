@@ -117,6 +117,7 @@ public sealed partial class PristonRenderer : IDisposable
     private readonly PristonShadowCascades _cascades = new();
     private ShadowFilterMode _shadowFilter = ShadowFilterMode.Pcss;
     private bool _ambientOcclusion = true;
+    private bool _depthPrepass = true;
     private bool _contactShadows = true;
     private bool _fullShadowRefresh = true;
     private int _cascadeMask;
@@ -222,6 +223,7 @@ public sealed partial class PristonRenderer : IDisposable
         _lampShadows.Configure(settings.ShadowsEnabled ? settings.LampShadowCount : 0, settings.LampShadowTileSize);
         _shadowFilter = settings.ShadowFilter;
         _ambientOcclusion = settings.AmbientOcclusion;
+        _depthPrepass = settings.DepthPrepass;
         _contactShadows = settings.ContactShadows;
         _imageBasedLighting = settings.ImageBasedLighting;
         _screenReflections = settings.ScreenSpaceReflections;
@@ -539,8 +541,9 @@ public sealed partial class PristonRenderer : IDisposable
         var twoSidedBatches = 0;
         var visibleStaticMeshDiagnostics = new PristonMeshDiagnostics();
         var temporal = _postSettings.AntiAliasing == AntiAliasingMode.Taa && DebugView != PristonDebugView.Overdraw;
-        // The depth pre-pass pays for itself: the lit pass shades each pixel once and the light tiles get depth bounds.
-        var prepass = _multiSampleCount == 0 && DebugView != PristonDebugView.Overdraw;
+        var prepass = PristonDepthPrepassPolicy.ShouldRun(_multiSampleCount, DebugView == PristonDebugView.Overdraw,
+            DebugView == PristonDebugView.Shaded, temporal, _depthPrepass, _ambientOcclusion, _contactShadows,
+            _screenReflections, _volumetricLight);
         // Binding the scene target ends the caller's render pass, so the profiler can reset its timestamps outside one.
         _sceneTargets.Begin(_multiSampleCount, temporal, prepass);
         // M1.4.3 GPU timings are opt-in and only started on the rendering thread.
