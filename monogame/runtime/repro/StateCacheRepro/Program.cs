@@ -31,6 +31,9 @@ namespace StateCacheRepro
         private RenderTarget2D? _target;
         private RenderTarget2D? _other;
         private BasicEffect? _effect;
+        private SpriteBatch? _samplerBatch;
+        private Texture2D? _samplerPixel;
+        private bool _samplerDrawn;
         private int _frame;
 
         public int Failures { get; private set; }
@@ -47,6 +50,9 @@ namespace StateCacheRepro
             // PreserveContents: MonoGame clears a DiscardContents target whenever it is bound (the banded test rebinds it).
             _target = new RenderTarget2D(GraphicsDevice, Size, Size, false, SurfaceFormat.Color, DepthFormat.Depth24Stencil8, 0, RenderTargetUsage.PreserveContents);
             _other = new RenderTarget2D(GraphicsDevice, Size, Size, false, SurfaceFormat.Color, DepthFormat.None);
+            _samplerBatch = new SpriteBatch(GraphicsDevice);
+            _samplerPixel = new Texture2D(GraphicsDevice, 1, 1);
+            _samplerPixel.SetData(new[] { Color.White });
             _effect = new BasicEffect(GraphicsDevice) { VertexColorEnabled = true, World = Matrix.Identity, View = Matrix.Identity, Projection = Matrix.Identity };
         }
 
@@ -68,11 +74,15 @@ namespace StateCacheRepro
                 PixelConstantsTest();
             }
             else if (_frame <= _frames)
+            {
                 StressStep();
+                SamplerRetirementStep();
+            }
             else
             {
                 // Last: the 80 000 user-primitive draws leave as many dynamic vertex buffers in the runtime's free list,
                 // which slows every later frame down.
+                CheckSamplerPixel();
                 UniformOverflowTest();
                 Console.WriteLine($"{_frames} stress frames, {Failures} failed checks");
                 Exit();
@@ -208,6 +218,40 @@ namespace StateCacheRepro
             GraphicsDevice.DrawUserPrimitives(PrimitiveType.TriangleStrip, quad, 0, 2);
         }
 
+        // Retire a fresh sampler after recording a textured draw, without a read-back of that draw until the next
+        // frame. The sampler therefore has to survive the submission that Present is about to make.
+        private void SamplerRetirementStep()
+        {
+            CheckSamplerPixel();
+            var device = GraphicsDevice;
+            device.SetRenderTarget(_other);
+            device.Clear(Color.Black);
+            using (var sampler = new SamplerState { Filter = TextureFilter.Point,
+                AddressU = TextureAddressMode.Clamp, AddressV = TextureAddressMode.Clamp })
+            {
+                _samplerBatch!.Begin(SpriteSortMode.Deferred, BlendState.Opaque, sampler);
+                _samplerBatch.Draw(_samplerPixel!, new Rectangle(0, 0, Size, Size), Color.Lime);
+                _samplerBatch.End();
+                device.SamplerStates[0] = SamplerState.LinearWrap;
+            }
+            device.SetRenderTarget(null);
+            _samplerDrawn = true;
+        }
+
+        private void CheckSamplerPixel()
+        {
+            if (!_samplerDrawn)
+                return;
+            var pixels = new Color[Size * Size];
+            _other!.GetData(pixels);
+            if (pixels[Size + 1] != Color.Lime)
+            {
+                Failures++;
+                Console.WriteLine($"sampler retirement: expected {Color.Lime}, got {pixels[Size + 1]}");
+            }
+            _samplerDrawn = false;
+        }
+
         private void StressStep()
         {
             var functions = new[] { BlendFunction.Add, BlendFunction.Subtract, BlendFunction.ReverseSubtract, BlendFunction.Min, BlendFunction.Max };
@@ -328,6 +372,8 @@ namespace StateCacheRepro
             {
                 _target?.Dispose();
                 _other?.Dispose();
+                _samplerBatch?.Dispose();
+                _samplerPixel?.Dispose();
                 _effect?.Dispose();
             }
             base.Dispose(disposing);

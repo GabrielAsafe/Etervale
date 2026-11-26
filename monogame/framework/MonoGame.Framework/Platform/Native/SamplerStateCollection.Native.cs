@@ -43,6 +43,13 @@ public sealed partial class SamplerStateCollection
                 continue;
 
             var sampler = _actualSamplers[i];
+            // Etervale fork: a disposed custom sampler must not be recreated with no owning device.
+            // On the next dirty-slot application, restore the collection's normal default.
+            if (sampler != null && sampler.IsDisposed)
+            {
+                this[i] = SamplerState.LinearWrap;
+                sampler = _actualSamplers[i];
+            }
             if (sampler != null)
             {
                 var state = sampler.GetHandle(device);

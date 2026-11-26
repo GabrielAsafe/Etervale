@@ -637,6 +637,7 @@ struct MGG_RasterizerState
 
 struct MGG_SamplerState
 {
+	FrameCounter retiredFrame = 0;
 	uint64_t id;
 	VkSampler sampler;
 	MGG_SamplerState_Info info;
@@ -3013,7 +3014,23 @@ static void MGVK_DestroyFrameResources(MGG_GraphicsDevice* device, FrameCounter 
 		while (device->destroySamplers.size() > 0)
 		{
 			auto sampler = device->destroySamplers.front();
+			// Present can have several submissions in flight. A sampler is not safe to
+			// destroy merely because its managed owner disposed it.
+			if (!free_all && currentFrame - sampler->retiredFrame < device->freeFrames)
+				break;
 			device->destroySamplers.pop();
+			// Invalidate any remaining CPU-side references before releasing the wrapper.
+			for (int stage = 0; stage < (int)MGShaderStage::Count; ++stage)
+			{
+				for (int slot = 0; slot < MAX_TEXTURE_SLOTS; ++slot)
+				{
+					if (device->samplers[stage][slot] == sampler)
+					{
+						device->samplers[stage][slot] = nullptr;
+						device->textureSamplerDirty |= 1u << slot;
+					}
+				}
+			}
 			vkDestroySampler(device->device, sampler->sampler, nullptr);
 			delete sampler;
 		}
@@ -4177,7 +4194,13 @@ static void MGVK_BindShaderResources(MGG_GraphicsDevice* device, FrameCounter cu
 			else if (w.descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
 			{
 				int slot = w.dstBinding - 32;
-				((VkDescriptorImageInfo*)w.pImageInfo)->sampler = device->samplers[(mgint)shader->stage][slot]->sampler;
+				auto sampler = device->samplers[(mgint)shader->stage][slot];
+				if (!sampler)
+				{
+					fprintf(stderr, "Missing bound Vulkan sampler at stage %d slot %d\n", (int)shader->stage, slot);
+					std::abort();
+				}
+				((VkDescriptorImageInfo*)w.pImageInfo)->sampler = sampler->sampler;
 
 				auto tex = device->textures[(mgint)shader->stage][slot];
 				if (tex)
@@ -5584,6 +5607,7 @@ void MGG_SamplerState_Destroy(MGG_GraphicsDevice* device, MGG_SamplerState* stat
 	if (!state)
 		return;
 
+	state->retiredFrame = device->frame;
 	device->destroySamplers.push(state);
 }
 
