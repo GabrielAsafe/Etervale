@@ -84,6 +84,17 @@
 	}																					\
 }
 
+// Etervale fork (issue 041): negative results and positive statuses such as TIMEOUT are not completion.
+// The existing VK_CHECK_RESULT only asserts on negative results, and assertions can be disabled in Release.
+static void MGVK_RequireCompletion(VkResult result, const char* operation)
+{
+	if (result == VK_SUCCESS)
+		return;
+	fprintf(stderr, "Fatal Vulkan completion failure: %s (VkResult=%d)\n", operation, (int)result);
+	fflush(stderr);
+	std::abort();
+}
+
 // Makes sense for 2026.
 #define MGVK_MAX_MIPS 16
 
@@ -1370,14 +1381,14 @@ static void MGVK_FlushCommands(MGG_GraphicsDevice* device, MGVK_Frame& frame)
 	MGVK_EndRenderPass(device, frame.commandBuffer);
 
 	VkResult res = vkEndCommandBuffer(frame.commandBuffer);
-	VK_CHECK_RESULT(res);
+	MGVK_RequireCompletion(res, "vkEndCommandBuffer");
 
 	VkFence renderFence;
 	{
 		VkFenceCreateInfo fenceCreateInfo = {};
 		fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 		fenceCreateInfo.flags = 0;
-		vkCreateFence(device->device, &fenceCreateInfo, nullptr, &renderFence);
+		MGVK_RequireCompletion(vkCreateFence(device->device, &fenceCreateInfo, nullptr, &renderFence), "vkCreateFence");
 		VK_SET_OBJECT_NAME(device->device, renderFence, VK_OBJECT_TYPE_FENCE, "MGVK_FlushCommands.renderFence");
 	}
 
@@ -1398,9 +1409,9 @@ static void MGVK_FlushCommands(MGG_GraphicsDevice* device, MGVK_Frame& frame)
 	}
 	{
 		std::lock_guard lock(device->queueMutex);
-		vkQueueSubmit(device->queue, 1, &submitInfo, renderFence);
+		MGVK_RequireCompletion(vkQueueSubmit(device->queue, 1, &submitInfo, renderFence), "vkQueueSubmit");
 	}
-	vkWaitForFences(device->device, 1, &renderFence, VK_TRUE, UINT64_MAX);
+	MGVK_RequireCompletion(vkWaitForFences(device->device, 1, &renderFence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
 	vkDestroyFence(device->device, renderFence, nullptr);
 }
 
@@ -1464,28 +1475,28 @@ static VkCommandBuffer MGVK_BeginNewCommandBuffer(MGG_GraphicsDevice* device, Vk
 	allocInfo.commandBufferCount = 1;
 
 	VkCommandBuffer commandBuffer;
-	vkAllocateCommandBuffers(device->device, &allocInfo, &commandBuffer);
+	MGVK_RequireCompletion(vkAllocateCommandBuffers(device->device, &allocInfo, &commandBuffer), "vkAllocateCommandBuffers");
 	VK_SET_OBJECT_NAME(device->device, commandBuffer, VK_OBJECT_TYPE_COMMAND_BUFFER, "MGVK_BeginNewCommandBuffer::commandBuffer");
 
 	VkCommandBufferBeginInfo beginInfo = {};
 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-	vkBeginCommandBuffer(commandBuffer, &beginInfo);
+	MGVK_RequireCompletion(vkBeginCommandBuffer(commandBuffer, &beginInfo), "vkBeginCommandBuffer");
 
 	return commandBuffer;
 }
 
 static void MGVK_ExecuteAndFreeCommandBuffer(MGG_GraphicsDevice* device, VkCommandBuffer commandBuffer, VkCommandPool pool)
 {
-	vkEndCommandBuffer(commandBuffer);
+	MGVK_RequireCompletion(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
 
 	VkFence renderFence;
 	{
 		VkFenceCreateInfo fenceCreateInfo = {};
 		fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 		fenceCreateInfo.flags = 0;
-		vkCreateFence(device->device, &fenceCreateInfo, nullptr, &renderFence);
+		MGVK_RequireCompletion(vkCreateFence(device->device, &fenceCreateInfo, nullptr, &renderFence), "vkCreateFence");
 		VK_SET_OBJECT_NAME(device->device, renderFence, VK_OBJECT_TYPE_FENCE, "MGVK_ExecuteAndFreeCommandBuffer.renderFence");
 	}
 
@@ -1497,10 +1508,10 @@ static void MGVK_ExecuteAndFreeCommandBuffer(MGG_GraphicsDevice* device, VkComma
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &commandBuffer;
 
-		vkQueueSubmit(device->queue, 1, &submitInfo, renderFence);
+		MGVK_RequireCompletion(vkQueueSubmit(device->queue, 1, &submitInfo, renderFence), "vkQueueSubmit");
 	}
 
-	vkWaitForFences(device->device, 1, &renderFence, VK_TRUE, UINT64_MAX);
+	MGVK_RequireCompletion(vkWaitForFences(device->device, 1, &renderFence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
 	vkDestroyFence(device->device, renderFence, nullptr);
 
 	pool = pool ? pool : device->cmdPool;
@@ -1720,12 +1731,12 @@ MGG_GraphicsDevice* MGG_GraphicsDevice_Create(MGG_GraphicsSystem* system, MGG_Gr
 	cmdPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 	cmdPoolInfo.queueFamilyIndex = device->graphicsQueueFamily;
 	res = vkCreateCommandPool(device->device, &cmdPoolInfo, nullptr, &device->cmdPool);
-	VK_CHECK_RESULT(res);
+	MGVK_RequireCompletion(res, "vkCreateCommandPool");
 	VK_SET_OBJECT_NAME(device->device, device->cmdPool, VK_OBJECT_TYPE_COMMAND_POOL, "MGG_GraphicsDevice.cmdPool");
 
 	// Create the command pool for graphics transfers.
 	res = vkCreateCommandPool(device->device, &cmdPoolInfo, nullptr, &device->transferPool);
-	VK_CHECK_RESULT(res);
+	MGVK_RequireCompletion(res, "vkCreateCommandPool");
 	VK_SET_OBJECT_NAME(device->device, device->transferPool, VK_OBJECT_TYPE_COMMAND_POOL, "MGG_GraphicsDevice.transferPool");
 
 	// Create the pipeline cache which is used at runtime
@@ -1902,7 +1913,7 @@ void MGG_GraphicsDevice_Destroy(MGG_GraphicsDevice* device)
 
 	// Be sure we're done drawing.
 	// Prevents some exceptions while shutting down.
-	vkDeviceWaitIdle(device->device);
+	MGVK_RequireCompletion(vkDeviceWaitIdle(device->device), "vkDeviceWaitIdle");
 
 	MGVK_WaitPendingTransfers(device, nullptr);
 
@@ -2063,7 +2074,7 @@ void MGVK_RecreateSwapChain(
 	assert(device != nullptr);
 	assert(nativeWindowHandle != nullptr);
 
-	vkDeviceWaitIdle(device->device);
+	MGVK_RequireCompletion(vkDeviceWaitIdle(device->device), "vkDeviceWaitIdle");
 
 	std::lock_guard lock(device->queueMutex);
 
@@ -2338,7 +2349,7 @@ void MGVK_RecreateSwapChain(
 			auto& frame = device->frames[i];
 
 			res = vkAllocateCommandBuffers(device->device, &comBufferInfo, &frame.commandBuffer);
-			VK_CHECK_RESULT(res);
+			MGVK_RequireCompletion(res, "vkAllocateCommandBuffers");
 			VK_SET_OBJECT_NAME(device->device, frame.commandBuffer, VK_OBJECT_TYPE_COMMAND_BUFFER, "MGVK_Frame.buffer[%d]", i);
 
 			VkSemaphoreCreateInfo semaphore_create_info = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
@@ -2349,7 +2360,7 @@ void MGVK_RecreateSwapChain(
 			VkFenceCreateInfo fence_create_info = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
 			fence_create_info.flags = 0;//VK_FENCE_CREATE_SIGNALED_BIT;
 			res = vkCreateFence(device->device, &fence_create_info, NULL, &frame.completedFence);
-			VK_CHECK_RESULT(res);
+			MGVK_RequireCompletion(res, "vkCreateFence");
 			VK_SET_OBJECT_NAME(device->device, frame.completedFence, VK_OBJECT_TYPE_FENCE, "MGVK_Frame.completedFence[%d]", i);
 
 			auto& swap = device->swapchains[i];
@@ -2518,11 +2529,11 @@ mgbyte MGG_GraphicsDevice_ResizeSwapchain(
 		auto& frame = device->frames[device->frameIndex];
 		MGVK_EndRenderPass(device, frame.commandBuffer);
 		VkResult res = vkEndCommandBuffer(frame.commandBuffer);
-		VK_CHECK_RESULT(res);
+		MGVK_RequireCompletion(res, "vkEndCommandBuffer");
 
 		VkFence fence;
 		VkFenceCreateInfo fenceInfo = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-		vkCreateFence(device->device, &fenceInfo, nullptr, &fence);
+		MGVK_RequireCompletion(vkCreateFence(device->device, &fenceInfo, nullptr, &fence), "vkCreateFence");
 		VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 		VkSubmitInfo submitInfo = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
 		submitInfo.waitSemaphoreCount = frame.image_index != (uint32_t)-1 && !frame.acquireWaited ? 1 : 0;
@@ -2533,9 +2544,9 @@ mgbyte MGG_GraphicsDevice_ResizeSwapchain(
 		submitInfo.pCommandBuffers = &frame.commandBuffer;
 		{
 			std::lock_guard lock(device->queueMutex);
-			vkQueueSubmit(device->queue, 1, &submitInfo, fence);
+			MGVK_RequireCompletion(vkQueueSubmit(device->queue, 1, &submitInfo, fence), "vkQueueSubmit");
 		}
-		vkWaitForFences(device->device, 1, &fence, VK_TRUE, UINT64_MAX);
+		MGVK_RequireCompletion(vkWaitForFences(device->device, 1, &fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
 		vkDestroyFence(device->device, fence, nullptr);
 		frame.is_recording = false;
 	}
@@ -2598,9 +2609,9 @@ void MGVK_BeginCommandBuffer(VkCommandBuffer commandBuffer)
 	};
 
 	auto res = vkResetCommandBuffer(commandBuffer, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
-	VK_CHECK_RESULT(res);
+	MGVK_RequireCompletion(res, "vkResetCommandBuffer");
 	res = vkBeginCommandBuffer(commandBuffer, &beginInfo);
-	VK_CHECK_RESULT(res);
+	MGVK_RequireCompletion(res, "vkBeginCommandBuffer");
 
 	//vkCmdSetDepthClampEnableEXT(commandBuffer, VK_TRUE);
 }
@@ -2612,8 +2623,7 @@ void MGVK_TryAcquireSwap(MGG_GraphicsDevice* device, MGVK_Frame& frame)
 	// Block and wait for the frame to be done rendering.
 	if (frame.is_rendering)
 	{
-		res = vkWaitForFences(device->device, 1, &frame.completedFence, VK_TRUE, UINT64_MAX);
-		VK_CHECK_RESULT(res);
+		MGVK_RequireCompletion(vkWaitForFences(device->device, 1, &frame.completedFence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
 		frame.is_rendering = false;
 		MGVK_CollectFrameCapture(device, device->frameIndex);
 	}
@@ -2629,7 +2639,7 @@ void MGVK_TryAcquireSwap(MGG_GraphicsDevice* device, MGVK_Frame& frame)
 
 	// This should be cleared by now.
 	res = vkResetFences(device->device, 1, &frame.completedFence);
-	VK_CHECK_RESULT(res);
+	MGVK_RequireCompletion(res, "vkResetFences");
 }
 
 void MGVK_PrepareFrame(MGG_GraphicsDevice* device)
@@ -3130,7 +3140,7 @@ void MGVK_WaitPendingTransfers(MGG_GraphicsDevice* device, MGG_Texture* texture)
 			continue;
 		}
 
-		vkWaitForFences(device->device, 1, &pending.done, VK_TRUE, UINT64_MAX);
+		MGVK_RequireCompletion(vkWaitForFences(device->device, 1, &pending.done, VK_TRUE, UINT64_MAX), "vkWaitForFences");
 
 		vkFreeCommandBuffers(device->device, device->transferPool, 1, &pending.cmd);
 		vmaDestroyBuffer(device->allocator, pending.staging.buffer, pending.staging.allocation);
@@ -3149,12 +3159,13 @@ void MGVK_CleanupPendingTransfers(MGG_GraphicsDevice* device)
 	for (size_t i = 0; i < transfers.size(); )
 	{
 		auto& pending = transfers[i];
-		VkResult res = vkGetFenceStatus(device->device, pending.done);
-		if (res == VK_NOT_READY)
+		VkResult res = vkWaitForFences(device->device, 1, &pending.done, VK_TRUE, 0);
+		if (res == VK_TIMEOUT)
 		{
 			i++;
 			continue;
 		}
+		MGVK_RequireCompletion(res, "poll pending transfer");
 
 		vkFreeCommandBuffers(device->device, device->transferPool, 1, &pending.cmd);
 		vmaDestroyBuffer(device->allocator, pending.staging.buffer, pending.staging.allocation);
@@ -3167,7 +3178,7 @@ void MGVK_CleanupPendingTransfers(MGG_GraphicsDevice* device)
 
 	if (reset && transfers.size() == 0)
 	{
-		vkResetCommandPool(device->device, device->transferPool, VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT);
+		MGVK_RequireCompletion(vkResetCommandPool(device->device, device->transferPool, VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT), "vkResetCommandPool");
 	}
 }
 
@@ -3194,7 +3205,7 @@ void MGG_GraphicsDevice_Present(MGG_GraphicsDevice* device, mgint currentFrame, 
 		std::lock_guard lock(device->queueMutex);
 
 		res = vkEndCommandBuffer(frame.commandBuffer);
-		VK_CHECK_RESULT(res);
+		MGVK_RequireCompletion(res, "vkEndCommandBuffer");
 		frame.is_recording = false;
 
 		VkSemaphore waits[] = { frame.imageAcquiredSemaphore };
@@ -5087,7 +5098,7 @@ void MGG_GraphicsDevice_GetBackBufferData(MGG_GraphicsDevice* device, mgint x, m
 
 	MGVK_EndRenderPass(device, frame.commandBuffer);
 
-	VK_CHECK_RESULT(vkEndCommandBuffer(frame.commandBuffer));
+	MGVK_RequireCompletion(vkEndCommandBuffer(frame.commandBuffer), "vkEndCommandBuffer");
 
 	VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 
@@ -5102,14 +5113,14 @@ void MGG_GraphicsDevice_GetBackBufferData(MGG_GraphicsDevice* device, mgint x, m
 
 	VkFence flushFence;
 	VkFenceCreateInfo fenceInfo = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-	vkCreateFence(device->device, &fenceInfo, nullptr, &flushFence);
+	MGVK_RequireCompletion(vkCreateFence(device->device, &fenceInfo, nullptr, &flushFence), "vkCreateFence");
 	VK_SET_OBJECT_NAME(device->device, flushFence, VK_OBJECT_TYPE_FENCE, "MGG_GraphicsDevice_GetBackBufferData::flushFence");
 
 	{
 		std::lock_guard lock(device->queueMutex);
-		vkQueueSubmit(device->queue, 1, &flushSubmitInfo, flushFence);
+		MGVK_RequireCompletion(vkQueueSubmit(device->queue, 1, &flushSubmitInfo, flushFence), "vkQueueSubmit");
 	}
-	vkWaitForFences(device->device, 1, &flushFence, VK_TRUE, UINT64_MAX);
+	MGVK_RequireCompletion(vkWaitForFences(device->device, 1, &flushFence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
 	vkDestroyFence(device->device, flushFence, nullptr);
 
 	auto srcImage = device->swapchains[frame.image_index].texture->image;
@@ -6500,10 +6511,10 @@ void MGG_Texture_SetData(MGG_GraphicsDevice* device, MGG_Texture* texture, mgint
 		VkFenceCreateInfo fenceCreateInfo = {};
 		fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 		fenceCreateInfo.flags = 0;
-		vkCreateFence(device->device, &fenceCreateInfo, nullptr, &transfer.done);
+		MGVK_RequireCompletion(vkCreateFence(device->device, &fenceCreateInfo, nullptr, &transfer.done), "vkCreateFence");
 		VK_SET_OBJECT_NAME(device->device, transfer.done, VK_OBJECT_TYPE_FENCE, "MGVK_Transfer.done");
 
-		vkEndCommandBuffer(cmd);
+		MGVK_RequireCompletion(vkEndCommandBuffer(cmd), "vkEndCommandBuffer");
 
 		std::lock_guard lock2(device->queueMutex);
 		VkSubmitInfo submit = {};
@@ -6512,7 +6523,7 @@ void MGG_Texture_SetData(MGG_GraphicsDevice* device, MGG_Texture* texture, mgint
 		submit.commandBufferCount = 1;
 		submit.pCommandBuffers = &cmd;
 		submit.signalSemaphoreCount = 0;
-		vkQueueSubmit(device->queue, 1, &submit, transfer.done);
+		MGVK_RequireCompletion(vkQueueSubmit(device->queue, 1, &submit, transfer.done), "vkQueueSubmit");
 
 		device->pendingTransfers.push_back(transfer);
 	}
@@ -7177,7 +7188,7 @@ void MGG_OcclusionQuery_Destroy(MGG_GraphicsDevice* device, MGG_OcclusionQuery* 
 
 	if (query->queryPool != VK_NULL_HANDLE)
 	{
-		vkDeviceWaitIdle(device->device);
+		MGVK_RequireCompletion(vkDeviceWaitIdle(device->device), "vkDeviceWaitIdle");
 		vkDestroyQueryPool(device->device, query->queryPool, nullptr);
 	}
 
@@ -7216,21 +7227,21 @@ void MGG_OcclusionQuery_End(MGG_GraphicsDevice* device, MGG_OcclusionQuery* quer
     query->inBeginEndBlock = false;
 
     MGVK_EndRenderPass(device, frame.commandBuffer);
-    VK_CHECK_RESULT(vkEndCommandBuffer(frame.commandBuffer));
+    MGVK_RequireCompletion(vkEndCommandBuffer(frame.commandBuffer), "vkEndCommandBuffer");
 
     VkFence fence;
     VkFenceCreateInfo fenceInfo = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-    VK_CHECK_RESULT(vkCreateFence(device->device, &fenceInfo, nullptr, &fence));
+    MGVK_RequireCompletion(vkCreateFence(device->device, &fenceInfo, nullptr, &fence), "vkCreateFence");
 
     VkSubmitInfo submitInfo = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &frame.commandBuffer;
 	{
 		std::lock_guard lock(device->queueMutex);
-		VK_CHECK_RESULT(vkQueueSubmit(device->queue, 1, &submitInfo, fence));
+		MGVK_RequireCompletion(vkQueueSubmit(device->queue, 1, &submitInfo, fence), "vkQueueSubmit");
 	}
 
-    VK_CHECK_RESULT(vkWaitForFences(device->device, 1, &fence, VK_TRUE, UINT64_MAX));
+    MGVK_RequireCompletion(vkWaitForFences(device->device, 1, &fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
     vkDestroyFence(device->device, fence, nullptr);
 
 	MGVK_BeginCommandBuffer(frame.commandBuffer);
@@ -7500,7 +7511,7 @@ MG_EXPORT void MGG_TimestampPool_Destroy(MGG_GraphicsDevice* device, void* pool)
 	assert(device != nullptr);
 	if (pool == nullptr)
 		return;
-	vkDeviceWaitIdle(device->device);
+	MGVK_RequireCompletion(vkDeviceWaitIdle(device->device), "vkDeviceWaitIdle");
 	vkDestroyQueryPool(device->device, (VkQueryPool)pool, nullptr);
 }
 
@@ -7701,7 +7712,7 @@ MG_EXPORT void MGG_FrameCapture_Stop(MGG_GraphicsDevice* device)
 {
 	assert(device != nullptr);
 	device->captureEnabled = false;
-	vkDeviceWaitIdle(device->device);
+	MGVK_RequireCompletion(vkDeviceWaitIdle(device->device), "vkDeviceWaitIdle");
 	for (auto& slot : device->captureSlots)
 		MGVK_ReleaseCaptureSlot(device, slot);
 	device->captureSlots.clear();
@@ -7994,23 +8005,23 @@ static void MGVK_UploadStorageOffThread(MGG_GraphicsDevice* device, MGG_Buffer* 
 	poolInfo.queueFamilyIndex = device->graphicsQueueFamily;
 	VkCommandPool pool;
 	res = vkCreateCommandPool(device->device, &poolInfo, nullptr, &pool);
-	VK_CHECK_RESULT(res);
+	MGVK_RequireCompletion(res, "vkCreateCommandPool");
 	VkCommandBufferAllocateInfo cmdInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
 	cmdInfo.commandPool = pool;
 	cmdInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 	cmdInfo.commandBufferCount = 1;
 	VkCommandBuffer cmd;
 	res = vkAllocateCommandBuffers(device->device, &cmdInfo, &cmd);
-	VK_CHECK_RESULT(res);
+	MGVK_RequireCompletion(res, "vkAllocateCommandBuffers");
 	VkCommandBufferBeginInfo beginInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
 	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-	vkBeginCommandBuffer(cmd, &beginInfo);
+	MGVK_RequireCompletion(vkBeginCommandBuffer(cmd, &beginInfo), "vkBeginCommandBuffer");
 	MGVK_RecordStorageUpload(cmd, buffer, staging.buffer, offset, dataBytes);
-	vkEndCommandBuffer(cmd);
+	MGVK_RequireCompletion(vkEndCommandBuffer(cmd), "vkEndCommandBuffer");
 
 	VkFenceCreateInfo fenceInfo = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
 	VkFence done;
-	vkCreateFence(device->device, &fenceInfo, nullptr, &done);
+	MGVK_RequireCompletion(vkCreateFence(device->device, &fenceInfo, nullptr, &done), "vkCreateFence");
 	VK_SET_OBJECT_NAME(device->device, done, VK_OBJECT_TYPE_FENCE, "MGG_Buffer_SetStorageData.offThreadDone");
 	{
 		std::lock_guard lock(device->queueMutex);
@@ -8018,9 +8029,9 @@ static void MGVK_UploadStorageOffThread(MGG_GraphicsDevice* device, MGG_Buffer* 
 		submit.commandBufferCount = 1;
 		submit.pCommandBuffers = &cmd;
 		res = vkQueueSubmit(device->queue, 1, &submit, done);
-		VK_CHECK_RESULT(res);
+		MGVK_RequireCompletion(res, "vkQueueSubmit");
 	}
-	vkWaitForFences(device->device, 1, &done, VK_TRUE, UINT64_MAX);
+	MGVK_RequireCompletion(vkWaitForFences(device->device, 1, &done, VK_TRUE, UINT64_MAX), "vkWaitForFences");
 
 	vkDestroyFence(device->device, done, nullptr);
 	vkDestroyCommandPool(device->device, pool, nullptr);
@@ -8066,17 +8077,17 @@ MG_EXPORT void MGG_Buffer_SetStorageData(MGG_GraphicsDevice* device, MGG_Buffer*
 	transfer.cmd = MGVK_BeginNewCommandBuffer(device, device->transferPool);
 	transfer.staging = staging;
 	MGVK_RecordStorageUpload(transfer.cmd, buffer, staging.buffer, offset, dataBytes);
-	vkEndCommandBuffer(transfer.cmd);
+	MGVK_RequireCompletion(vkEndCommandBuffer(transfer.cmd), "vkEndCommandBuffer");
 
 	VkFenceCreateInfo fenceInfo = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-	vkCreateFence(device->device, &fenceInfo, nullptr, &transfer.done);
+	MGVK_RequireCompletion(vkCreateFence(device->device, &fenceInfo, nullptr, &transfer.done), "vkCreateFence");
 	VK_SET_OBJECT_NAME(device->device, transfer.done, VK_OBJECT_TYPE_FENCE, "MGG_Buffer_SetStorageData.done");
 	{
 		std::lock_guard lock2(device->queueMutex);
 		VkSubmitInfo submit = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
 		submit.commandBufferCount = 1;
 		submit.pCommandBuffers = &transfer.cmd;
-		vkQueueSubmit(device->queue, 1, &submit, transfer.done);
+		MGVK_RequireCompletion(vkQueueSubmit(device->queue, 1, &submit, transfer.done), "vkQueueSubmit");
 	}
 	device->pendingTransfers.push_back(transfer);
 }

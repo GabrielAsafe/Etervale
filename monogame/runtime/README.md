@@ -243,3 +243,7 @@ See [texture resource lifetime](../issues/039-texture-resource-lifetime.md).
 ## Shader resource lifetime
 
 See [shader resource lifetime](../issues/040-shader-resource-lifetime.md).
+
+## Vulkan transfer completion
+
+See [Vulkan transfer completion](../issues/041-vulkan-transfer-completion.md).
