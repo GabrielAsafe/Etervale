@@ -2188,7 +2188,21 @@ void MGVK_RecreateSwapChain(
 	create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	create_info.preTransform = surface_capabilities.currentTransform;
-	create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+	// Use only composite alpha modes supported by the current surface.
+	const VkCompositeAlphaFlagBitsKHR alphaModes[] = {
+		VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+		VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+		VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
+		VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR
+	};
+	for (const auto alphaMode : alphaModes)
+	{
+		if (surface_capabilities.supportedCompositeAlpha & alphaMode)
+		{
+			create_info.compositeAlpha = alphaMode;
+			break;
+		}
+	}
 	create_info.presentMode = selectedPresentMode;
 	create_info.clipped = VK_TRUE;
 	//create_info.pNext = &scalingCreateInfo;
@@ -4472,9 +4486,12 @@ static void MGVK_UpdatePipeline(MGG_GraphicsDevice* device, VkCommandBuffer comm
 			MGVK_UpdateDescriptors(device, currentFrame, program->pixel, &device->descriptorSets[setCount++], dynamicOffset);
 		}
 
-		// Bind the new descriptor sets.
-		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-			program->layout, setOffset, setCount, device->descriptorSets, offsetCount, device->dynamicOffsets);
+		// A program without resource bindings needs no descriptor-set bind.
+		if (setCount > 0)
+		{
+			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+				program->layout, setOffset, setCount, device->descriptorSets, offsetCount, device->dynamicOffsets);
+		}
 
 		// Clear all the dirty flags.
 		device->uniformsDirty = 0;

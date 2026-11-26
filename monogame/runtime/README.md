@@ -211,3 +211,7 @@ The runtime is MonoGame's code, under the Microsoft Public License (`../LICENSE-
 - `src/` (with the fork's changes), the patch and the built libraries are distributed under the MS-PL;
 - the vendored and statically linked libraries keep their own licences (`CREDITS.md`);
 - Etervale's own code uses the runtime as a separate library.
+
+## Surface alpha and resource-free graphics programs
+
+See [surface alpha and empty descriptor binds](../issues/033-desktop-surface-alpha-descriptors.md).
