@@ -81,11 +81,24 @@ namespace Microsoft.Xna.Framework.Graphics
             return ok;
         }
 
+        /// <summary>Reads the duration between two consecutive timestamp queries, in nanoseconds, without waiting.</summary>
+        /// <param name="first">The index of the starting timestamp; the next index holds the ending timestamp.</param>
+        /// <param name="nanoseconds">Elapsed time on success, or zero if either query is unavailable.</param>
+        /// <returns>True when both queries are available. The interval must be shorter than one counter wrap.</returns>
+        public unsafe bool TryGetElapsedNanoseconds(int first, out double nanoseconds)
+        {
+            CheckRange(first, 2);
+            ulong ticks;
+            bool ok = MGG.TimestampPool_ReadElapsed(GraphicsDevice.Handle, _pool, (uint)first, &ticks) != 0;
+            nanoseconds = ok ? ticks * _nanosecondsPerTick : 0d;
+            return ok;
+        }
+
         private void CheckRange(int first, int count)
         {
             if (IsDisposed)
                 throw new ObjectDisposedException(nameof(GpuTimestampPool));
-            if (first < 0 || count < 0 || first + count > Count)
+            if (first < 0 || count < 0 || first > Count - count)
                 throw new ArgumentOutOfRangeException(nameof(first), $"Timestamps [{first}, {first + count}) are outside the pool of {Count}.");
         }
 

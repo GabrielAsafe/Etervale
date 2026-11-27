@@ -216,7 +216,7 @@ The runtime is MonoGame's code, under the Microsoft Public License (`../LICENSE-
 - Etervale's own code uses the runtime as a separate library.
 
 See [Vulkan swapchain resource lifetime](../issues/021-vulkan-swapchain-lifetime.md) for the retirement and
-recreation contract. Android serial presentation remains enabled.
+recreation contract. Android presentation is asynchronous; frame-slot reuse waits for completion.
 
 See [Vulkan sampler retirement](../issues/022-vulkan-sampler-lifetime.md) for the deferred sampler lifetime contract.
 
@@ -224,8 +224,7 @@ See [Vulkan owned texture retirement](../issues/023-vulkan-texture-lifetime.md) 
 
 See [Vulkan shader and descriptor-pool retirement](../issues/024-vulkan-shader-lifetime.md) for the deferred shader lifetime contract.
 
-The current Android diagnostic presentation path waits for the submitted render fence rather than the entire queue.
-See [Android render-fence presentation experiment](../issues/025-android-render-fence-present.md).
+Android waits on submitted fences with bounded retries on timeout; see the Android diagnostics and transfer issues.
 
 See [Android packaged Vulkan validation diagnostics](../issues/027-android-packaged-validation.md) for the opt-in diagnostic build.
 
@@ -233,4 +232,8 @@ Swapchain creation selects a supported composite alpha mode. See [surface alpha 
 
 Vulkan 1.0 extended feature queries use the enabled KHR entry point. See [feature queries](../issues/029-vulkan-1-0-feature-query.md).
 
-See [attachment sample counts](../issues/033-vulkan-attachment-samples.md). Runtime interface version 8 requires a matching native library.
+See [attachment sample counts](../issues/033-vulkan-attachment-samples.md). Runtime interface version 10 requires a matching native library.
+
+The shared runtime preserves bound-resource retirement and Android fence retries, and includes the desktop
+[GPU timestamp capabilities](../issues/042-gpu-timestamp-capabilities.md) and checked completion paths.
+See [unified runtime ABI and lifetime policy](../issues/043-unified-vulkan-runtime.md).

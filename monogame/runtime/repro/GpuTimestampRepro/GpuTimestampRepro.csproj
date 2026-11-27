@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../framework/MonoGame.Framework/MonoGame.Framework.Native.csproj" />
+  </ItemGroup>
+  <PropertyGroup>
+    <EtervaleRuntimeRid Condition="$([MSBuild]::IsOSPlatform('Linux')) And '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'X64'">linux-x64</EtervaleRuntimeRid>
+    <EtervaleRuntimeRid Condition="$([MSBuild]::IsOSPlatform('Linux')) And '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">linux-arm64</EtervaleRuntimeRid>
+    <EtervaleRuntimeRid Condition="$([MSBuild]::IsOSPlatform('OSX'))">osx</EtervaleRuntimeRid>
+    <EtervaleRuntimeRid Condition="$([MSBuild]::IsOSPlatform('Windows'))">win-x64</EtervaleRuntimeRid>
+    <EtervaleRuntimeDir>$(MSBuildThisFileDirectory)../../bin/$(EtervaleRuntimeRid)/</EtervaleRuntimeDir>
+  </PropertyGroup>
+  <Target Name="EtervaleForkedRuntime" AfterTargets="Build" Condition="'$(EtervaleRuntimeRid)' != ''">
+    <Error Condition="!Exists('$(EtervaleRuntimeDir)')" Text="Build the runtime fork first: monogame/runtime/build.sh." />
+    <ItemGroup>
+      <EtervaleRuntimeFile Include="$(EtervaleRuntimeDir)*mgruntime*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(EtervaleRuntimeFile)" DestinationFolder="$(OutDir)" />
+  </Target>
+</Project>

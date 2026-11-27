@@ -71,7 +71,7 @@ renderer through `PresentationSettings.ApplyRendering` and apply at once.
 | `refreshRate` | int, `0` | 0-1000 | yes (fullscreen only) | 0 desktop frequency. The platform switches at the desktop frequency only; a nonzero value logs a warning. Display. |
 | `verticalSync` | bool, `false` | | yes | Applied without a display reset. |
 | `musicEnabled`, `soundEnabled` | bool, `true`, `true` | | yes (BGM, Audio) | Read by `PristonAudioLibrary.ApplySettings` every update; the login and character screens ignore them. |
-| `maxFps` | int, `0` | 0 or 15-1000 | yes: 0, 30, 60, 90, 120, 144, 165, 240, 360 | Foreground frame limit; 0 unlimited. Paced by `PresentationController.Pace` (sleeps in 1-4 ms steps). |
+| `maxFps` | int, `0` | 0 or 15-1000 | yes: 0, 30, 60, 90, 120, 144, 165, 240, 360 | Foreground frame limit; 0 unlimited. `PresentationController.Pace` sleeps in 1-4 ms steps only until the next deadline, after frame work and presentation. Over-budget frames do not wait; a missed deadline re-anchors the cadence without catch-up. Changing the limit starts a new cadence without an initial wait. |
 | `backgroundMaxFps` | int, `30` | 0 or 15-1000 | yes (same list) | Limit while the window is inactive: `min(maxFps, backgroundMaxFps)`, or `backgroundMaxFps` when `maxFps` is 0; 0 means "use `maxFps`". |
 | `uiScale` | float, `1` | 0.75-1.5 | | Validated and stored only; the in-game HUD always uses the largest integer scale that fits. |
 | `classicTargetHealthBar` | bool, `false` | | yes (Target HP) | `false`: the target frame always shows the HP bar with level and life percentage. `true`: the bar, without numbers, appears only after you attack a monster at full life. Either way the frame shows a live 3D portrait of the target's head, its name and, for monsters, the race icon. |
@@ -88,7 +88,7 @@ renderer through `PresentationSettings.ApplyRendering` and apply at once.
 |---|---|---|---|---|
 | `quality` | `High` (default), `Low`, `Medium`, `Ultra`, `Custom` | defined enum | yes (Graphics quality) | Label of the preset the fields came from. The panel applies a preset with `WithQuality`; editing any preset field in the panel sets `Custom`. Loading a file never applies a preset. |
 | `antiAliasing` | `Taa` (default), `Off`, `Fxaa`, `Smaa`, `Msaa` | defined enum | yes | `Taa`: jittered projection, motion vectors (skinned actors from their previous pose), history resolve. `Msaa`: multisampled HDR scene, no depth pre-pass. `Fxaa`/`Smaa`: 1x filter on the 8-bit display image. |
-| `multiSampleCount` | int, `4` | 0, 2, 4, 8 | label only | Samples of the HDR scene with `antiAliasing` `Msaa` only; the renderer clamps to 2-4 (`PristonRenderer.ApplyQuality`). Also a Display field: a change goes through confirmation. |
+| `multiSampleCount` | int, `4` | 0, 2, 4, 8 | label only | Samples of the HDR scene with `antiAliasing` `Msaa` only; the renderer clamps to 2-4 (`PristonRenderer.ApplyQuality`) and the scene target selects a supported count or zero. Also a Display field: a change goes through confirmation. |
 | `autoExposure` | bool, `true` | | | GPU histogram and adaptation; `false` holds the light model's incident reading. |
 | `exposureCompensation` | float stops, `0` | finite, -3 to 3 | | Added to the automatic or fixed exposure. |
 | `tonemapper` | `PbrNeutral` (default), `AgX`, `Aces` | defined enum | | Display transform of the final pass. |
@@ -104,6 +104,7 @@ renderer through `PresentationSettings.ApplyRendering` and apply at once.
 | `shadowUpdateRate` | int Hz, `60` | 0, 30, 60, 120 | yes (Shadow animation: 30, 60, 120, every frame) | Sun cascade refit and refresh rate; 0 every frame. Far cascades refresh less often; at night the rate is halved (at least 30 Hz). The two near cascades redraw every frame regardless, so characters cast from their current pose. |
 | `lampShadowCount` | int, `4` | 0, 2, 4 | | Stage lamps nearest the focus whose cube shadows actors and animated props cast, while the lamps are lit (sun below about 4 degrees). |
 | `lampShadowTileSize` | int, `512` | 256, 512, 1024 | | Cube-face size of each lamp shadow. |
+| `depthPrepass` | bool, `true` | | | Keep the pre-pass even with no configured depth-dependent effects. `false` permits skipping it in shaded, non-TAA, non-MSAA scenes when AO, contact shadows, SSR and volumetric light are all off. Soft particles and light-tile depth bounds are unavailable when it is skipped. Quality presets leave this preference unchanged. |
 | `ambientOcclusion` | bool, `true` | | | Half-resolution GTAO from the depth pre-pass (not with MSAA). |
 | `contactShadows` | bool, `true` | | | Screen-space contact shadows toward the sun (by day only, not by moonlight; not with MSAA). |
 | `imageBasedLighting` | bool, `true` | | | Sky-dome irradiance (spherical harmonics) and prefiltered reflections, refreshed every 250 ms; `false`: hemispherical sky/ground ambient. |
@@ -244,9 +245,9 @@ The UI, combat text, ground labels, touch coordinates, off-screen previews, open
 native geometry. The final display transform still runs at native output resolution. The F9 performance log reports
 `scene3D` dimensions independently of the display viewport. The former 50% scale is no longer selected by gameplay.
 
-Android gameplay skips the optional depth pre-pass when temporal AA, ambient occlusion, contact shadows,
-screen-space reflections and volumetric light are all off. The main opaque pass still writes its normal depth buffer.
+Android gameplay requests skipping the optional depth pre-pass in the shaded view when temporal AA,
+ambient occlusion, contact shadows, screen-space reflections and volumetric light are all off. The main opaque pass still writes its normal depth buffer.
 Tile lighting can use the full view depth range; soft particles lose their optional linear-depth fade in this mode.
-Other renderer callers retain their original pre-pass policy. The performance log reports `depthPrepass=on/off`.
+Other renderer callers use the `depthPrepass` preference. The performance log reports `depthPrepass=on/off`.
 
 Frame pacing schedules the next boundary from the previous boundary. A frame that has already exceeded its period does not incur another full sleep. The first boundary after a limit change establishes the new clock without an arbitrary delay.

@@ -112,6 +112,8 @@ public sealed record ClientSettings
     // Ground-truth ambient occlusion and screen-space contact shadows from a depth pre-pass (not with MSAA).
     public bool AmbientOcclusion { get; init; } = true;
     public bool ContactShadows { get; init; } = true;
+    // Keep the depth pre-pass even when no configured screen-space effect requires it.
+    public bool DepthPrepass { get; init; } = true;
 
     public ClientSettings Validate(IClientLog log)
     {
@@ -279,6 +281,7 @@ public sealed record ClientSettings
             && ShadowFilter == other.ShadowFilter
             && AmbientOcclusion == other.AmbientOcclusion
             && ContactShadows == other.ContactShadows
+            && DepthPrepass == other.DepthPrepass
             && LampShadowCount == other.LampShadowCount
             && ImageBasedLighting == other.ImageBasedLighting
             && ScreenSpaceReflections == other.ScreenSpaceReflections

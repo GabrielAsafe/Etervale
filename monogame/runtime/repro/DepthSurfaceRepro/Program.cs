@@ -93,6 +93,79 @@ namespace DepthSurfaceRepro
                 Failures++;
         }
 
+        private void CheckMultisampleTargets()
+        {
+            var device = GraphicsDevice;
+            using var effect = new BasicEffect(device) { VertexColorEnabled = true, World = Matrix.Identity, View = Matrix.Identity, Projection = Matrix.Identity };
+            using var rasterizer = new RasterizerState { CullMode = CullMode.None, MultiSampleAntiAlias = true };
+            var vertices = new VertexPositionColor[]
+            {
+                new(new Vector3(-1, 1, 0.5f), Color.Red),
+                new(new Vector3(3, 1, 0.5f), Color.Red),
+                new(new Vector3(-1, -3, 0.5f), Color.Red),
+            };
+            foreach (var requested in new[] { 0, 2, 4 })
+            {
+                int selected = device.GetSupportedRenderTarget2DMultiSampleCount(SurfaceFormat.HalfVector4, DepthFormat.Depth32Float, requested);
+                bool valid = (selected == 0 || selected == 2 || selected == 4) && selected <= requested;
+                if (!valid)
+                {
+                    Report($"MSAA {requested}", false, $"invalid negotiated count {selected}");
+                    continue;
+                }
+
+                using var target = new RenderTarget2D(device, Width, Height, false, SurfaceFormat.HalfVector4, DepthFormat.Depth32Float,
+                    selected, RenderTargetUsage.PreserveContents);
+                device.SetRenderTarget(target);
+                device.Clear(ClearOptions.Target | ClearOptions.DepthBuffer, Color.Black, 1f, 0);
+                device.BlendState = BlendState.Opaque;
+                device.DepthStencilState = DepthStencilState.Default;
+                device.RasterizerState = rasterizer;
+                effect.CurrentTechnique.Passes[0].Apply();
+                device.DrawUserPrimitives(PrimitiveType.TriangleList, vertices, 0, 1);
+                device.SetRenderTarget(null);
+                var pixels = new Microsoft.Xna.Framework.Graphics.PackedVector.HalfVector4[Width * Height];
+                target.GetData(pixels);
+                var pixel = pixels[Width + 1].ToVector4();
+                bool red = Math.Abs(pixel.X - 1f) < 0.01f && Math.Abs(pixel.Y) < 0.01f && Math.Abs(pixel.Z) < 0.01f;
+                Report($"MSAA {requested}", target.MultiSampleCount == selected && red,
+                    $"selected {selected}, target {target.MultiSampleCount}, pixel {pixel}");
+            }
+            device.RasterizerState = RasterizerState.CullNone;
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static WeakReference CreateUnownedTexture(GraphicsDevice device)
+        {
+            var texture = new Texture2D(device, Width, Height);
+            return new WeakReference(texture, trackResurrection: true);
+        }
+
+        private void CheckDeferredFinalization()
+        {
+            var device = GraphicsDevice;
+            var reference = CreateUnownedTexture(device);
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+
+            // The queue must keep the object alive, and must not have disposed it on the GC thread.
+            var texture = reference.Target as Texture2D;
+            if (texture is null || texture.IsDisposed)
+            {
+                Report("deferred finalization", false, "texture was not retained pending graphics-thread disposal");
+                return;
+            }
+
+            device.SetRenderTarget(null);
+            device.Clear(Color.Black);
+            device.Present();
+            Report("deferred finalization", texture.IsDisposed, "orphan disposed after Present");
+
+            using var explicitTexture = new Texture2D(device, Width, Height);
+            explicitTexture.Dispose();
+            Report("explicit disposal", explicitTexture.IsDisposed, "explicit disposal remains synchronous");
+        }
+
         protected override void Draw(GameTime gameTime)
         {
             GraphicsDevice.SetRenderTarget(_surface);
@@ -110,6 +183,8 @@ namespace DepthSurfaceRepro
             GraphicsDevice.Clear(ClearOptions.Target | ClearOptions.DepthBuffer, Color.Transparent, 1f, 0);
             Check("clear of target and depth", "Load", _ => 1f);
 
+            CheckMultisampleTargets();
+            CheckDeferredFinalization();
             Console.WriteLine($"{Failures} failed checks");
             Exit();
             base.Draw(gameTime);

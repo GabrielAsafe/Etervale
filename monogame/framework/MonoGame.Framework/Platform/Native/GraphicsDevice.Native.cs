@@ -20,37 +20,17 @@ public partial class GraphicsDevice
 
     private int _currentFrame = -1;
 
-    /// <summary>Enable render-thread finalization before creating an Android graphics device with serial presentation.</summary>
-    public static bool EtervaleAndroidDeferredFinalizers { get; set; }
-
-    internal bool DefersNativeFinalizers { get; } = EtervaleAndroidDeferredFinalizers;
-    private readonly NativeResourceFinalizerQueue<GraphicsResource> _nativeFinalizers = new();
+    /// <summary>Compatibility switch for older Android startup code; all native devices now defer finalizers.</summary>
+    public static bool EtervaleAndroidDeferredFinalizers { get => true; set { } }
 
     /// <summary>Number of resource finalizers accepted by the device's deferred queue.</summary>
-    public long EtervaleNativeFinalizersQueued => _nativeFinalizers.QueuedCount;
+    public long EtervaleNativeFinalizersQueued { get { lock (_resourcesLock) return _finalizationQueued; } }
 
     /// <summary>Number of queued finalizers processed at a graphics-device boundary.</summary>
-    public long EtervaleNativeFinalizersDrained => _nativeFinalizers.DrainedCount;
+    public long EtervaleNativeFinalizersDrained { get { lock (_resourcesLock) return _finalizationDrained; } }
 
     /// <summary>Number of finalizer requests rejected after the native device started closing.</summary>
-    public long EtervaleNativeFinalizersRejected => _nativeFinalizers.RejectedCount;
-
-    internal bool DeferNativeFinalizer(GraphicsResource resource)
-    {
-        if (!DefersNativeFinalizers)
-            return false;
-
-        // Even after closure, never fall back to a native call from the finalizer thread.
-        _nativeFinalizers.TryEnqueue(resource);
-        return true;
-    }
-
-    private void DrainNativeFinalizers()
-    {
-        if (DefersNativeFinalizers)
-            _nativeFinalizers.Drain(static resource => resource.CompleteDeferredFinalizer());
-    }
-
+    public long EtervaleNativeFinalizersRejected { get { lock (_resourcesLock) return _finalizationRejected; } }
 
     private readonly Dictionary<int, DynamicVertexBuffer> _userVertexBuffers = new Dictionary<int, DynamicVertexBuffer>();
     private DynamicIndexBuffer _userIndexBuffer16;
@@ -149,6 +129,20 @@ public partial class GraphicsDevice
         // Setup the default texture.
         DefaultTexture = new Texture2D(this, 2, 2);
         DefaultTexture.SetData(new[] { Color.Black, Color.Black, Color.Black, Color.Black });
+    }
+
+    // Etervale fork: the formats of the actual colour and depth images can support fewer sample counts than the device.
+    /// <summary>
+    /// Returns a supported multisample count for the requested color
+    /// and depth formats, or zero for single-sample rendering.
+    /// </summary>
+    public unsafe int GetSupportedRenderTarget2DMultiSampleCount(SurfaceFormat format, DepthFormat depthFormat, int requested)
+    {
+        int normalized = GetClampedMultisampleCount(format, requested);
+        if (normalized <= 1)
+            return 0;
+
+        return MGG.GraphicsDevice_GetRenderTarget2DMultiSampleCount(Handle, format, depthFormat, normalized);
     }
 
     internal int PlatformGetMaxMultiSampleCount(SurfaceFormat format)
@@ -302,9 +296,6 @@ public partial class GraphicsDevice
 
         DefaultTexture.Dispose();
 
-        if (DefersNativeFinalizers)
-            _nativeFinalizers.CloseAndDrain(static resource => resource.CompleteDeferredFinalizer());
-
         if (Handle != null)
         {
             MGG.GraphicsDevice_Destroy(Handle);
@@ -320,8 +311,6 @@ public partial class GraphicsDevice
         var syncInterval = PresentationParameters.PresentationInterval.GetSyncInterval();
         MGG.GraphicsDevice_Present(Handle, _currentFrame, syncInterval);
         _currentFrame = -1;
-        // Android serial Present has completed GPU work before this boundary.
-        DrainNativeFinalizers();
     }
 
     private unsafe void PlatformSetViewport(ref Viewport viewport)

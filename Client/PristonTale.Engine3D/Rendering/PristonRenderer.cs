@@ -121,6 +121,7 @@ public sealed partial class PristonRenderer : IDisposable
     private readonly PristonShadowCascades _cascades = new();
     private ShadowFilterMode _shadowFilter = ShadowFilterMode.Pcss;
     private bool _ambientOcclusion = true;
+    private bool _depthPrepass = true;
     private bool _contactShadows = true;
     private bool _fullShadowRefresh = true;
     private int _cascadeMask;
@@ -321,6 +322,7 @@ public sealed partial class PristonRenderer : IDisposable
         _lampShadows.Configure(settings.ShadowsEnabled ? settings.LampShadowCount : 0, settings.LampShadowTileSize);
         _shadowFilter = settings.ShadowFilter;
         _ambientOcclusion = settings.AmbientOcclusion;
+        _depthPrepass = settings.DepthPrepass;
         _contactShadows = settings.ContactShadows;
         _imageBasedLighting = settings.ImageBasedLighting;
         _screenReflections = settings.ScreenSpaceReflections;
@@ -645,10 +647,10 @@ public sealed partial class PristonRenderer : IDisposable
         var twoSidedBatches = 0;
         var visibleStaticMeshDiagnostics = new PristonMeshDiagnostics();
         var temporal = _postSettings.AntiAliasing == AntiAliasingMode.Taa && DebugView != PristonDebugView.Overdraw;
-        // Keep the original pre-pass by default, and retain it for effects that depend on scene depth.
-        var supportsPrepass = !_h700Lite && _multiSampleCount == 0 && DebugView != PristonDebugView.Overdraw;
-        var needsDepth = _ambientOcclusion || _contactShadows || _screenReflections || _volumetricLight;
-        var prepass = ShouldUseDepthPrepass(supportsPrepass, skipOptionalDepthPrepass, temporal, needsDepth);
+        var prepass = !_h700Lite && PristonDepthPrepassPolicy.ShouldRun(
+            _multiSampleCount, DebugView == PristonDebugView.Overdraw, DebugView == PristonDebugView.Shaded,
+            temporal, _depthPrepass && !skipOptionalDepthPrepass, _ambientOcclusion, _contactShadows,
+            _screenReflections, _volumetricLight);
         // Binding the scene target ends the caller's render pass, so the profiler can reset its timestamps outside one.
         _sceneTargets.Begin(_multiSampleCount, temporal, prepass, sceneScalePercent);
         _mobileGpuProbe = profileGpu;

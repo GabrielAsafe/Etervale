@@ -22,6 +22,7 @@ The framework was a NuGet package (issue 001).
   the reset, exactly as it would at the next draw. No submission or wait is added.
 - `void Write(int index)`: `vkCmdWriteTimestamp` at the bottom of the pipe, at this point of the frame;
 - `bool TryGetNanoseconds(int index, out ulong ns)`: without waiting; false until the frame completed;
+- `bool TryGetElapsedNanoseconds(int first, out double ns)`: reads a pair without waiting, handling counter wrap;
 - `Count`, `NanosecondsPerTick`; ranges are checked (`ArgumentOutOfRangeException`).
 
 The application's reflection-based helper is deleted; its per-section profiler (the application's own) uses the pool.

@@ -26,10 +26,17 @@ namespace StateCacheRepro
     {
         private const int Size = 4;
         private readonly int _frames;
+        private readonly GraphicsDeviceManager _graphics;
         private readonly Random _random = new(20261013);
         private RenderTarget2D? _target;
         private RenderTarget2D? _other;
         private BasicEffect? _effect;
+        private SpriteBatch? _samplerBatch;
+        private Texture2D? _samplerPixel;
+        private bool _samplerDrawn;
+        private RenderTarget2D? _retirementOutput;
+        private bool _retirementDrawn;
+        private bool _shaderRetirementPending;
         private int _frame;
 
         public int Failures { get; private set; }
@@ -37,7 +44,7 @@ namespace StateCacheRepro
         public ReproGame(int frames)
         {
             _frames = frames;
-            _ = new GraphicsDeviceManager(this) { PreferredBackBufferWidth = 64, PreferredBackBufferHeight = 64 };
+            _graphics = new GraphicsDeviceManager(this) { PreferredBackBufferWidth = 64, PreferredBackBufferHeight = 64 };
             Content.RootDirectory = "Content";
         }
 
@@ -46,11 +53,26 @@ namespace StateCacheRepro
             // PreserveContents: MonoGame clears a DiscardContents target whenever it is bound (the banded test rebinds it).
             _target = new RenderTarget2D(GraphicsDevice, Size, Size, false, SurfaceFormat.Color, DepthFormat.Depth24Stencil8, 0, RenderTargetUsage.PreserveContents);
             _other = new RenderTarget2D(GraphicsDevice, Size, Size, false, SurfaceFormat.Color, DepthFormat.None);
+            _retirementOutput = new RenderTarget2D(GraphicsDevice, Size, Size, false, SurfaceFormat.Color,
+                DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+            _samplerBatch = new SpriteBatch(GraphicsDevice);
+            _samplerPixel = new Texture2D(GraphicsDevice, 1, 1);
+            _samplerPixel.SetData(new[] { Color.White });
             _effect = new BasicEffect(GraphicsDevice) { VertexColorEnabled = true, World = Matrix.Identity, View = Matrix.Identity, Projection = Matrix.Identity };
         }
 
         protected override void Draw(GameTime gameTime)
         {
+            CheckShaderRetirementPixel();
+            // Exercise recreation while the ordinary stress test continues drawing and checking pixels.
+            if (_frame > 0 && _frame <= Math.Min(_frames, 8))
+            {
+                _graphics.PreferredBackBufferWidth = _frame % 2 == 0 ? 64 : 160;
+                _graphics.PreferredBackBufferHeight = _frame % 2 == 0 ? 64 : 120;
+                _graphics.ApplyChanges();
+                Console.WriteLine($"resize request {_frame}: {_graphics.PreferredBackBufferWidth}x{_graphics.PreferredBackBufferHeight}");
+            }
+
             if (_frame == 0)
             {
                 CollisionTest();
@@ -58,11 +80,17 @@ namespace StateCacheRepro
                 PixelConstantsTest();
             }
             else if (_frame <= _frames)
+            {
                 StressStep();
+                SamplerRetirementStep();
+                TextureRetirementStep();
+            }
             else
             {
                 // Last: the 80 000 user-primitive draws leave as many dynamic vertex buffers in the runtime's free list,
                 // which slows every later frame down.
+                CheckSamplerPixel();
+                CheckRetiredTexturePixel();
                 UniformOverflowTest();
                 Console.WriteLine($"{_frames} stress frames, {Failures} failed checks");
                 Exit();
@@ -129,7 +157,16 @@ namespace StateCacheRepro
         private void PixelConstantsTest()
         {
             var device = GraphicsDevice;
+            // Effect clones do not own shader modules; retire the actual cached source, not just its clone.
+            var field = typeof(GraphicsDevice).GetField("EffectCache",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            var cache = field?.GetValue(device) as Dictionary<int, Effect>
+                ?? throw new InvalidOperationException("Cannot locate the effect source cache for retirement repro.");
+            var priorKeys = cache.Keys.ToHashSet();
             var effect = Content.Load<Effect>("PixelConstants");
+            var added = cache.Keys.Where(key => !priorKeys.Contains(key)).ToArray();
+            if (added.Length != 1)
+                throw new InvalidOperationException("Expected exactly one new shader-owning effect source.");
             var colour = effect.Parameters["Colour"];
             device.SetRenderTarget(_target);
             device.Clear(Color.Black);
@@ -156,6 +193,36 @@ namespace StateCacheRepro
                 Failures++;
                 Console.WriteLine($"pixel constants: expected the second draw's {Color.Lime}, got {pixels[Size + 1]}");
             }
+
+            // This draw is not read back until after Present. Retiring the actual shader owner here must not
+            // destroy its descriptor pool or pipeline while the recorded draw still needs them.
+            device.SetRenderTarget(_target);
+            device.Clear(Color.Black);
+            colour.SetValue(Color.Blue.ToVector4());
+            effect.CurrentTechnique.Passes[0].Apply();
+            device.DrawUserPrimitives(PrimitiveType.TriangleStrip, quad, 0, 2);
+            device.SetRenderTarget(null);
+            var owner = cache[added[0]];
+            cache.Remove(added[0]);
+            effect.Dispose();
+            owner.Dispose();
+            _shaderRetirementPending = true;
+        }
+
+        private void CheckShaderRetirementPixel()
+        {
+            if (!_shaderRetirementPending)
+                return;
+            var pixels = new Color[Size * Size];
+            _target!.GetData(pixels);
+            if (pixels[Size + 1] != Color.Blue)
+            {
+                Failures++;
+                Console.WriteLine($"shader retirement: expected {Color.Blue}, got {pixels[Size + 1]}");
+            }
+            else
+                Console.WriteLine("PASS shader retirement before Present");
+            _shaderRetirementPending = false;
         }
 
         private void UniformOverflowTest()
@@ -196,6 +263,78 @@ namespace StateCacheRepro
             };
             _effect.CurrentTechnique.Passes[0].Apply();
             GraphicsDevice.DrawUserPrimitives(PrimitiveType.TriangleStrip, quad, 0, 2);
+        }
+
+        // Retire a fresh sampler after recording a textured draw, without a read-back of that draw until the next
+        // frame. The sampler therefore has to survive the submission that Present is about to make.
+        private void SamplerRetirementStep()
+        {
+            CheckSamplerPixel();
+            var device = GraphicsDevice;
+            device.SetRenderTarget(_other);
+            device.Clear(Color.Black);
+            using (var sampler = new SamplerState { Filter = TextureFilter.Point,
+                AddressU = TextureAddressMode.Clamp, AddressV = TextureAddressMode.Clamp })
+            {
+                _samplerBatch!.Begin(SpriteSortMode.Deferred, BlendState.Opaque, sampler);
+                _samplerBatch.Draw(_samplerPixel!, new Rectangle(0, 0, Size, Size), Color.Lime);
+                _samplerBatch.End();
+                device.SamplerStates[0] = SamplerState.LinearWrap;
+            }
+            device.SetRenderTarget(null);
+            _samplerDrawn = true;
+        }
+
+        private void CheckSamplerPixel()
+        {
+            if (!_samplerDrawn)
+                return;
+            var pixels = new Color[Size * Size];
+            _other!.GetData(pixels);
+            if (pixels[Size + 1] != Color.Lime)
+            {
+                Failures++;
+                Console.WriteLine($"sampler retirement: expected {Color.Lime}, got {pixels[Size + 1]}");
+            }
+            _samplerDrawn = false;
+        }
+
+        // Record a draw into a depth-backed target, sample it in another pass, then retire it before Present.
+        // The next frame verifies the output of those recorded commands.
+        private void TextureRetirementStep()
+        {
+            CheckRetiredTexturePixel();
+            var device = GraphicsDevice;
+            using var target = new RenderTarget2D(device, Size, Size, false, SurfaceFormat.Color,
+                DepthFormat.Depth24Stencil8, 0, RenderTargetUsage.PreserveContents);
+            device.SetRenderTarget(target);
+            device.Clear(ClearOptions.Target | ClearOptions.DepthBuffer | ClearOptions.Stencil, Color.Black, 1f, 0);
+            _samplerBatch!.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp,
+                DepthStencilState.Default);
+            _samplerBatch.Draw(_samplerPixel!, new Rectangle(0, 0, Size, Size), Color.Red);
+            _samplerBatch.End();
+            device.SetRenderTarget(_retirementOutput);
+            device.Clear(Color.Black);
+            _samplerBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
+            _samplerBatch.Draw(target, new Rectangle(0, 0, Size, Size), Color.White);
+            _samplerBatch.End();
+            device.SetRenderTarget(null);
+            device.Textures[0] = null;
+            _retirementDrawn = true;
+        }
+
+        private void CheckRetiredTexturePixel()
+        {
+            if (!_retirementDrawn)
+                return;
+            var pixels = new Color[Size * Size];
+            _retirementOutput!.GetData(pixels);
+            if (pixels[Size + 1] != Color.Red)
+            {
+                Failures++;
+                Console.WriteLine($"texture retirement: expected {Color.Red}, got {pixels[Size + 1]}");
+            }
+            _retirementDrawn = false;
         }
 
         private void StressStep()
@@ -318,6 +457,9 @@ namespace StateCacheRepro
             {
                 _target?.Dispose();
                 _other?.Dispose();
+                _retirementOutput?.Dispose();
+                _samplerBatch?.Dispose();
+                _samplerPixel?.Dispose();
                 _effect?.Dispose();
             }
             base.Dispose(disposing);

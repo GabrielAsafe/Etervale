@@ -187,7 +187,7 @@ checks.
 | 5 | `SkyCapture` | fog on, sky visible, sky changed | Four 32-px tiles of the dome for the fog colour. |
 | 6 | `Environment` | IBL on, every 250 ms | Six dome faces, SH irradiance, octahedral map, prefiltered atlas. |
 | 7 | `Sky` | always | Dome layers into the sky target (sRGB codes in half floats), then `SkyComposite` fills every scene target. |
-| 8 | `Prepass` | no MSAA, not `Overdraw` | Depth, linear depth, normals (smoothness in alpha), motion of opaque surfaces and cut-outs. |
+| 8 | `Prepass` | no MSAA, not `Overdraw`; preference on, TAA, development view or configured depth effect | Depth, linear depth, normals (smoothness in alpha), motion of opaque surfaces and cut-outs. |
 | 9 | `AmbientOcclusion` | pre-pass ran and AO or contact shadows on | GTAO and contact shadows at half resolution, blur. |
 | 10 | `LightCulling` | any local light | 16x16 tile masks (depth-bounded after the pre-pass). |
 | - | (outline) | an actor with `SetActorOutline` | `DrawOutlines`: the actor flat in one colour, shifted 1.4 px scaled by the screen height over 600 (times the outline strength) in four directions, pushed back 16 units and writing depth, so the lit actor covers it and only a rim stays. |
@@ -440,7 +440,8 @@ they took the domes.
   thirds of fine texture contrast; depth tolerance 0.06; motion of skinned actors from the previous bone
   palette (`PristonSkinPalette` keeps the previous pose, stamped per motion frame), of wind and water from the previous
   animation time. Volumetric and AO noise rotate per frame only with TAA.
-- **MSAA:** scene target multisampled (2-4), the back buffer never.
+- **MSAA:** scene target requests 2-4 samples, negotiated against HDR colour and depth support; zero means single-sampled.
+  The back buffer is never multisampled.
 - **FXAA / SMAA 1x:** on the 8-bit display image after the final pass.
 
 ## Diagnostics
@@ -454,6 +455,7 @@ they took the domes.
   `SceneTotal` spans renderer draw, effects and composition, but excludes HUD and presentation. Absent results are `n/a`;
   reset and read misses are counted separately. Repeated sections retain the first completed GPU query pair for the frame.
   GPU timestamp intervals may overlap; they are not additive and can include gaps between commands.
+  Durations use the selected queue family's timestamp width; unsupported queues leave GPU timing unavailable.
 - `LastStreamingStats`: per `StreamingStep` count, total and worst main-thread milliseconds and bytes of the last stage
   upload (`[Stream] upload steps` log line).
 - `--benchmark-render <assets> <content> <report.json> <fieldId> <settings.json> [seconds runs hour orbit [distance

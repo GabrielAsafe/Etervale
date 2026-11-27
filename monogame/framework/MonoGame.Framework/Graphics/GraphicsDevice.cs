@@ -156,6 +156,14 @@ namespace Microsoft.Xna.Framework.Graphics
         // may be disposed and collected. We do not want to prevent a resource from being
         // collected by holding a strong reference to it in this list.
         private readonly HashSet<WeakReference> _resources = new HashSet<WeakReference>();
+#if NATIVE
+        // Etervale fork: the same lock protects the resource registry and the finalization queue at shutdown.
+        private readonly Queue<GraphicsResource> _finalizedResources = new Queue<GraphicsResource>();
+        private bool _finalizationClosed;
+        private long _finalizationQueued;
+        private long _finalizationDrained;
+        private long _finalizationRejected;
+#endif
 
         // TODO Graphics Device events need implementing
         // Etervale fork: DeviceLost, ResourceCreated and ResourceDestroyed are XNA API that the Native platform never
@@ -684,12 +692,15 @@ namespace Microsoft.Xna.Framework.Graphics
             {
                 if (disposing)
                 {
-#if NATIVE
-                    DrainNativeFinalizers();
-#endif
                     // Dispose of all remaining graphics resources before disposing of the graphics device
                     lock (_resourcesLock)
                     {
+#if NATIVE
+                        // Etervale fork: close producers before the final drain and resource sweep. Long weak
+                        // references retain visibility of a resource while its finalizer waits on this lock.
+                        _finalizationClosed = true;
+                        DrainFinalizedResources();
+#endif
                         foreach (var resource in _resources.ToArray())
                         {
                             var target = resource.Target as IDisposable;
@@ -729,6 +740,49 @@ namespace Microsoft.Xna.Framework.Graphics
             }
         }
 
+#if NATIVE
+        // Etervale fork: the GC thread publishes only managed references; it never calls native destruction here.
+        internal void EnqueueFinalizedResource(GraphicsResource resource)
+        {
+            lock (_resourcesLock)
+            {
+                if (!_finalizationClosed)
+                {
+                    _finalizedResources.Enqueue(resource);
+                    _finalizationQueued++;
+                }
+                else
+                {
+                    _finalizationRejected++;
+                }
+            }
+        }
+
+        private void DrainFinalizedResources()
+        {
+            int count;
+            lock (_resourcesLock)
+            {
+                count = _finalizedResources.Count;
+            }
+
+            // Bound this drain to the resources queued when it began. A producer cannot starve Present.
+            for (int i = 0; i < count; i++)
+            {
+                GraphicsResource resource;
+                lock (_resourcesLock)
+                {
+                    resource = _finalizedResources.Dequeue();
+                }
+                resource.DisposeFinalizedResource();
+                lock (_resourcesLock)
+                {
+                    _finalizationDrained++;
+                }
+            }
+        }
+#endif
+
         internal void AddResourceReference(WeakReference resourceReference)
         {
             lock (_resourcesLock)
@@ -758,6 +812,10 @@ namespace Microsoft.Xna.Framework.Graphics
 
             _graphicsMetrics = new GraphicsMetrics();
             PlatformPresent();
+#if NATIVE
+            // Etervale fork: native retirement is initiated on the graphics thread after submission.
+            DrainFinalizedResources();
+#endif
         }
 
         /*
