@@ -450,6 +450,8 @@ menu. The central block can be moved as a unit in the mobile HUD editor. While e
 dragged controls snap their centers to the nearest available grid intersection inside the 48-unit horizontal and
 24-unit vertical safety margins. If the control cannot fit on that grid, the margin is relaxed to keep it on screen.
 Saved normalized centers remain unchanged until a control is moved; loading or rotating does not resnap them.
+Mobile control lookups reuse cached role names and shortcut labels; pressed-state checks iterate the existing finger
+collection without allocating predicates. The saved position keys and the drawing and hit-test order are unchanged.
 Visible quick controls take input before the minimap and central block, including while editing. The explicit mobile
 loot command does not depend on the virtual mouse position; modal and movement locks, keyboard capture, and existing
 loot reachability and interaction checks still apply. Its potion slots and the separate editable P1–P3

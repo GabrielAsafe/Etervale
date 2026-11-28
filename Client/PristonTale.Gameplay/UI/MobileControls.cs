@@ -97,6 +97,12 @@ internal sealed class MobileControls
     internal int SkillShortcutRequested { get; private set; } = -1;
 
     private static readonly string[] SkillShortcutLabels = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8"];
+    private static readonly string[] RoleNames = Enum.GetNames<Role>();
+
+    // Roles are contiguous from zero; preserve the exact existing JSON property names.
+    internal static string RoleKey(Role role) => (uint)role < (uint)RoleNames.Length ? RoleNames[(int)role] : role.ToString();
+
+    internal static string SkillShortcutLabel(Role role) => SkillShortcutLabels[(int)role - (int)Role.SkillF1];
 
     // Keep the assignment row above the centered skill window, outside its hit area.
     internal static Rectangle SkillPanelShortcutBounds(HudLayout layout, int index)
@@ -275,13 +281,13 @@ internal sealed class MobileControls
     {
         var bounds = Box(layout, role);
         var center = SnapHudCenter(layout, bounds, desiredCenter);
-        _positions[role.ToString()] = new Vector2(center.X / (float)layout.Width, center.Y / (float)layout.Height);
+        _positions[RoleKey(role)] = new Vector2(center.X / (float)layout.Width, center.Y / (float)layout.Height);
     }
 
     private Rectangle Box(HudLayout l, Role role)
     {
         var rectangle=Bounds(l,role,_options.Size,_options.LeftHanded);
-        if (_positions.TryGetValue(role.ToString(),out var center))
+        if (_positions.TryGetValue(RoleKey(role),out var center))
         {
             rectangle = SavedHudBounds(l, rectangle, center);
         }
@@ -336,8 +342,9 @@ internal sealed class MobileControls
                 if(VisibleQuick(role)&&VisibleGameQuick(role)&&Box(l,role).Contains(p))return role;
             if(Box(l,Role.Minimap).Contains(p))return Role.Minimap;
             if(Box(l,Role.Vitals).Contains(p))return Role.Vitals;
-            foreach(var role in new[]{Role.Toggle,Role.Menu,Role.ContextCamera})
-                if(Box(l,role).Contains(p))return role;
+            if (Box(l, Role.Toggle).Contains(p)) return Role.Toggle;
+            if (Box(l, Role.Menu).Contains(p)) return Role.Menu;
+            if (Box(l, Role.ContextCamera).Contains(p)) return Role.ContextCamera;
             return Role.None; // EDITAR nunca envia cliques ao cenário.
         }
         if(Box(l,Role.Toggle).Contains(p))return Role.Toggle;
@@ -652,6 +659,19 @@ internal sealed class MobileControls
     }
     private MouseState Pointer(MouseState raw,bool left,bool right) => new((int)_cursor.X,(int)_cursor.Y,raw.ScrollWheelValue,
         left?ButtonState.Pressed:ButtonState.Released,_fingers.Count==0&&!_preferPad&&!MenuCaptures?raw.MiddleButton:ButtonState.Released,right?ButtonState.Pressed:ButtonState.Released,ButtonState.Released,ButtonState.Released);
+    internal bool IsRolePressed(Role role)
+    {
+        foreach (var finger in _fingers.Values)
+        {
+            if (finger.Role == role)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private void Button(HudPainter painter,Rectangle r,string title, bool selected=false)
     {
         if(r.Width<=0||r.Height<=0)return;
@@ -733,11 +753,11 @@ internal sealed class MobileControls
                 Role.Potion1=>"P1",Role.Potion2=>"P2",Role.Potion3=>"P3",
                 Role.SkillF1 or Role.SkillF2 or Role.SkillF3 or Role.SkillF4
                     or Role.SkillF5 or Role.SkillF6 or Role.SkillF7 or Role.SkillF8
-                    =>$"F{(int)role-(int)Role.SkillF1+1}",
+                    =>SkillShortcutLabel(role),
                 _=>""
             };
             if(title.Length>0)Button(painter,Box(l,role),title,
-                _editing||_fingers.Values.Any(f=>f.Role==role));
+                _editing||IsRolePressed(role));
         }
     }
     public void Reset(bool preservePointer = false)

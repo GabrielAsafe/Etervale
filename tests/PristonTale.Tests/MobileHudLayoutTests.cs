@@ -23,6 +23,7 @@ internal static class MobileHudLayoutTests
         yield return Case("mobile HUD: WorldTouchRoutesToHudOnlyWhenAppropriate (true, false, true)", static () => WorldTouchRoutesToHudOnlyWhenAppropriate(true, false, true)); // painel/modal aberto: toque vai para o HUD
         yield return Case("mobile HUD: WorldTouchRoutesToHudOnlyWhenAppropriate (false, false, true)", static () => WorldTouchRoutesToHudOnlyWhenAppropriate(false, false, true)); // login/seleção: toque normal
         yield return Case("mobile HUD: WorldTouchRoutesToHudOnlyWhenAppropriate (false, true, true)", static () => WorldTouchRoutesToHudOnlyWhenAppropriate(false, true, true));
+        yield return Case("mobile HUD: stable role names and allocation-free control lookups", StableControlLookups);
         yield return Case("mobile HUD: DeadZoneIsRadialAndBounded", static () => DeadZoneIsRadialAndBounded());
         yield return Case("mobile HUD: DesktopScaleRemainsInteger", static () => DesktopScaleRemainsInteger());
         yield return Case("mobile HUD: MobileWorldTapIgnoresGestures (10f,10f,14f,11f,false,true,true)", static () => MobileWorldTapIgnoresGestures(10f,10f,14f,11f,false,true,true));
@@ -44,6 +45,57 @@ internal static class MobileHudLayoutTests
         run();
         return Task.CompletedTask;
     });
+
+    private static void StableControlLookups()
+    {
+        var roles = Enum.GetValues<MobileControls.Role>();
+        for (var i = 0; i < roles.Length; i++)
+        {
+            Check.Equal(i, (int)roles[i]);
+            Check.Equal(roles[i].ToString(), MobileControls.RoleKey(roles[i]));
+            Check.True(ReferenceEquals(MobileControls.RoleKey(roles[i]), MobileControls.RoleKey(roles[i])));
+        }
+
+        for (var i = 0; i < PristonTale.Gameplay.UI.Widgets.HudSkillBindings.ShortcutCount; i++)
+        {
+            var role = (MobileControls.Role)((int)MobileControls.Role.SkillF1 + i);
+            Check.Equal($"F{i + 1}", MobileControls.SkillShortcutLabel(role));
+            Check.True(ReferenceEquals(MobileControls.SkillShortcutLabel(role), MobileControls.SkillShortcutLabel(role)));
+        }
+
+        var controls = new MobileControls();
+        var layout = HudLayout.Create(2400, 1080, mobile: true);
+        var map = MobileControls.Bounds(layout, MobileControls.Role.Minimap);
+        Check.Equal(map, controls.MapBounds(layout));
+        var center = MobileControls.SnapHudCenter(layout, map, new Vector2(231, 321));
+        controls.MoveHudControl(layout, MobileControls.Role.Minimap, new Vector2(231, 321));
+        Check.Equal(center, controls.MapBounds(layout).Center);
+        var rotated = HudLayout.Create(1080, 2400, mobile: true);
+        var expected = MobileControls.SavedHudBounds(rotated, MobileControls.Bounds(rotated, MobileControls.Role.Minimap),
+            new Vector2(center.X / (float)layout.Width, center.Y / (float)layout.Height));
+        Check.Equal(expected, controls.MapBounds(rotated));
+
+        // Warm the same production helpers before measuring the idle draw lookups.
+        for (var i = 0; i < 1000; i++)
+        {
+            _ = controls.MapBounds(layout);
+            _ = controls.IsRolePressed(MobileControls.Role.Attack);
+            _ = MobileControls.SkillShortcutLabel(MobileControls.Role.SkillF1);
+        }
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var correct = true;
+        for (var i = 0; i < 1000; i++)
+        {
+            correct &= controls.MapBounds(layout).Center == center;
+            correct &= !controls.IsRolePressed(MobileControls.Role.Attack);
+            correct &= MobileControls.SkillShortcutLabel(MobileControls.Role.SkillF1) == "F1";
+        }
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Check.True(correct);
+        Assert.True(allocated == 0, $"idle mobile control lookups allocated {allocated} bytes");
+    }
 
     private static void MobileLayoutFitsAndPointerUsesSameScale(int width, int height)
     {
