@@ -16,6 +16,7 @@ internal static class ClientSettingsTests
         yield return ("settings write failures are observable without faulting gameplay", WriteFailureAsync);
         yield return ("frame pacing has no catch-up bursts and separates foreground limits", PacingAsync);
         yield return ("scaled scene preserves native output and unscaled subviewports", SceneScaleAsync);
+        yield return ("sky target format preserves desktop and physical sky precision", SkyTargetFormatAsync);
         yield return ("mobile graphics defaults and explicit choices preserve unrelated settings", MobileGraphicsAsync);
         yield return ("optional Android depth prepass preserves required rendering paths", OptionalDepthPrepassAsync);
         yield return ("GPU diagnostics distinguish absent samples from zero elapsed time", GpuProbeAsync);
@@ -369,6 +370,18 @@ internal static class ClientSettingsTests
         var invalid = mobile with { MobileResolution = (MobileResolution)999 };
         Assert.True(invalid.Validate(NullClientLog.Instance).MobileResolution == MobileResolution.High
             && MobileGraphicsPolicy.Apply(invalid).MobileResolution == MobileResolution.High, "invalid mobile resolution did not fall back");
+        return Task.CompletedTask;
+    }
+
+    private static Task SkyTargetFormatAsync()
+    {
+        var compact = Microsoft.Xna.Framework.Graphics.SurfaceFormat.Color;
+        var full = Microsoft.Xna.Framework.Graphics.SurfaceFormat.HalfVector4;
+        Assert.True(PristonSceneTargets.SkyTargetFormat(true, true, false) == compact, "Android classic field sky is not RGBA8");
+        Assert.True(PristonSceneTargets.SkyTargetFormat(true, true, true) == full, "physical sky lost precision");
+        Assert.True(PristonSceneTargets.SkyTargetFormat(true, false, false) == full, "non-field sky lost precision");
+        Assert.True(PristonSceneTargets.SkyTargetFormat(false, true, false) == full, "desktop classic sky lost precision");
+        Assert.True(PristonSceneTargets.SkyTargetFormat(false, true, true) == full, "desktop physical sky lost precision");
         return Task.CompletedTask;
     }
 

@@ -38,7 +38,7 @@ Each `.fx` in `Passes/` builds to `Effects/<Name>` (the asset name the C# owner 
 | `Effects/Atmosphere` | `Atmosphere.fx` | `Transmittance`, `Multiple`, `SkyView`, `Clouds`, `CloudMerge`, `CloudShadow`, `Sky` | `Atmosphere/PristonPhysicalSky` | The realistic sky: atmosphere lookup tables, the volumetric clouds' hemisphere (a quarter marched each frame into a packed target, merged into its reprojected history) and shadow, and the sky with the sun, moon, stars, aurora, cirrus, clouds and rainbow into the sky target ([rendering.md](rendering.md#realistic-sky)). |
 | `Effects/Rain` | `Rain.fx` | `Drops`, `Splashes` | `Weather/PristonRain` | Rain streaks placed, wrapped, stretched and widened to a least pixel width in the vertex shader from seeds and time; streak parts under the occlusion map's surface discarded; procedural splash rings and sprays ([rendering.md](rendering.md#weather)). |
 | `Effects/Vfx` | `Vfx.fx` | `Vfx` | `PristonVfxEffect` (Effects `VfxRenderer`) | Skill and combat sprites in linear colour with the soft-particle fade against the pre-pass linear depth; `Mode` selects radiance, squared radiance (colour blends) or a multiplier / inverse multiplier for darkening blends. |
-| `Effects/SkyComposite` | `SkyComposite.fx` | `SkyComposite`, `Background` | `PristonSceneTargets` | First pass of every scene: decodes the 8-bit sky dome (or a flat radiance) into all scene targets, sky motion marker and depth. |
+| `Effects/SkyComposite` | `SkyComposite.fx` | `SkyComposite`, `Background` | `PristonSceneTargets` | First pass of every scene: decodes the display-referred sky dome (or a flat radiance) into all scene targets, sky motion marker and depth. |
 | `Effects/AmbientOcclusion` | `AmbientOcclusion.fx` | `Occlusion`, `Blur` | `Post/PristonScreenOcclusion` | Half-resolution GTAO (two slices, three horizon steps each way) and contact shadows toward the sun; 4x4 depth-aware blur. Output x AO, y contact visibility, z view depth. |
 | `Effects/LightCull` | `LightCull.fx` | `Cull` (compute) | `Lighting/PristonLightCulling` | One group per 16x16 tile: depth range from the pre-pass, sphere vs four side planes, a 32-bit light mask per tile. |
 | `Effects/Environment` | `Environment.fx` | `Irradiance` (compute), `Octahedral`, `Prefilter` | `Lighting/PristonEnvironmentLighting` | Order-2 SH irradiance of the dome's six faces (Lanczos-windowed), HDR octahedral map, five GGX-prefiltered levels in one atlas. |
@@ -209,8 +209,8 @@ transmittance + in-scatter with the exact optical depth). Sources: `tests/Pristo
 - Uniform initialisers and sampler-state defaults on uniforms are dropped; set values from C#.
 - The surface effect's whole stage cbuffer re-uploads on any parameter change; redundant `SetValue` calls cost GPU
   bandwidth, not just CPU.
-- The sky layers are display-referred art blended with original modes into an 8-bit target and decoded by
-  `SkyComposite.fx`; do not move them into the HDR target or their additive glows change.
+- The sky layers are display-referred art blended with original modes into a separate target and decoded by
+  `SkyComposite.fx` (RGBA8 for Android classic field domes, half floats otherwise); do not move them into the HDR target or their additive glows change.
 - Self-illuminated and additive materials take shading model 1; their brightness is display-referred by day and a fixed
   luminance at night. Changing `EmissiveLuminance` (`PristonRenderer`) changes night glows, not day ones, and never
   characters or monsters.

@@ -810,7 +810,7 @@ public sealed partial class PristonRenderer : IDisposable
         Profiler.Begin(RenderSection.Sky);
         if (skyVisible)
         {
-            _sceneTargets.BeginSky(SkyColor);
+            _sceneTargets.BeginSky(SkyColor, PristonSceneTargets.SkyTargetFormat(OperatingSystem.IsAndroid(), FieldSky, PhysicalSkyShown));
             _stateCache.InvalidateDeviceState();
             var skyView = frame.View;
             skyView.Translation = Vector3.Zero;

@@ -186,7 +186,7 @@ checks.
 | 4 | `LampShadows` | shadows on, lamps lit, rows to redraw | Cube faces of new lamp rows and one other row in turn. |
 | 5 | `SkyCapture` | fog on, sky visible, sky changed | Four 32-px tiles of the dome for the fog colour. |
 | 6 | `Environment` | IBL on, every 250 ms | Six dome faces, SH irradiance, octahedral map, prefiltered atlas. |
-| 7 | `Sky` | always | Dome layers into the sky target (sRGB codes in half floats), then `SkyComposite` fills every scene target. |
+| 7 | `Sky` | always | Dome layers into the sky target (display-referred sRGB codes), then `SkyComposite` fills every scene target. |
 | 8 | `Prepass` | no MSAA, not `Overdraw`; preference on, TAA, development view or configured depth effect | Depth, linear depth, normals (smoothness in alpha), motion of opaque surfaces and cut-outs. |
 | 9 | `AmbientOcclusion` | pre-pass ran and AO or contact shadows on | GTAO and contact shadows at half resolution, blur. |
 | 10 | `LightCulling` | any local light | 16x16 tile masks (depth-bounded after the pre-pass). |
@@ -211,12 +211,17 @@ and lamps at full.
 
 ## Render targets
 
+The Android classic field sky uses `SurfaceFormat.Color` (RGBA8 UNORM, not a hardware sRGB target).
+Its display-referred blending remains separate from the HDR scene. The smaller target clamps and quantises blended
+values; realistic skies, non-field skies and other platforms keep half floats. Changing the sky format recreates
+the target even when the viewport size stays the same.
+
 | Target | Format | Notes |
 |---|---|---|
 | Scene colour + depth | HalfVector4, Depth32Float (reversed) | Pre-exposed linear radiance; MSAA when `Msaa`; `PreserveContents`, filled by `SkyComposite`. |
 | Motion | HalfVector4 | TAA only: uv motion, previous view depth, view depth (negative on cut-outs). |
 | Linear depth, normals | R32F, RGBA8 | Pre-pass only; `SceneLinearDepth` exposes the depth to effects (null without pre-pass). |
-| Sky | sRGB codes in half floats | Dome layers with original blends, or the realistic sky, decoded into the scene. |
+| Sky | RGBA8 for Android classic field domes; HalfVector4 otherwise | Dome layers with original blends, or the realistic sky, decoded into the scene. |
 | Sun shadow atlas | D32F depth surface, `shadowMapSize` | 2x2 tiles from two cascades; casters write depth only (an opaque caster runs no pixel shader) and the lighting samples it; falls back by halves to 1024 if allocation fails. |
 | Lamp shadow atlas | R32F | One row per lamp, six faces of `lampShadowTileSize`. |
 | TAA history | 2 x HalfVector4 | Compressed colour and view depth, ping-pong. |
