@@ -210,7 +210,7 @@ internal sealed class PristonSceneTargets : IDisposable
         android && fieldSky && !physicalSky ? SurfaceFormat.Color : SurfaceFormat.HalfVector4;
 
     // Binds the sky target, cleared to the sRGB colour behind the dome, for the dome's layers.
-    public void BeginSky(Color background, SurfaceFormat format)
+    public void BeginSky(Color background, SurfaceFormat format, PristonFrameProfiler profiler = null)
     {
         if (_sky is null || _sky.Width != _color.Width || _sky.Height != _color.Height || _sky.Format != format)
         {
@@ -221,14 +221,21 @@ internal sealed class PristonSceneTargets : IDisposable
 
         _device.SetRenderTarget(_sky);
         _device.Viewport = _sceneViewport;
+        profiler?.Begin(RenderSection.SkyTarget);
         _device.Clear(background);
     }
 
     // Starts the scene: clears depth (PristonDepth) and fills every scene target with the sky dome composed by BeginSky
     // (sky true) or a flat radiance, behind everything.
-    public void Fill(bool sky, float displayScale, Vector3 backgroundRadiance)
+    public void Fill(bool sky, float displayScale, Vector3 backgroundRadiance, PristonFrameProfiler profiler = null)
     {
         BindTemporal();
+        // The existing target switch resolves the off-screen sky before the HDR scene starts.
+        if (sky)
+        {
+            profiler?.End(RenderSection.SkyTarget);
+        }
+        profiler?.Begin(RenderSection.HdrToDisplay);
         _device.Clear(ClearOptions.DepthBuffer, Vector4.Zero, PristonDepth.Clear, 0);
         _device.BlendState = BlendState.Opaque;
         _skyComposite.CurrentTechnique = sky ? _skyTechnique : _backgroundTechnique;

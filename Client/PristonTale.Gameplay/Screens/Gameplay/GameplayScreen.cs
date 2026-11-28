@@ -61,12 +61,10 @@ public sealed class GameplayScreen : GameScreen
         }
 
         MobileDiagnosticTrace.WritePerformance("GPU mean_ms/samples (cumulative since renderer creation)"
-            + $" | total={profiler.GpuSampleSummary(RenderSection.SceneTotal)} world={profiler.GpuSampleSummary(RenderSection.Frame)}"
-            + $" | sky={profiler.GpuSampleSummary(RenderSection.Sky)} opaque={profiler.GpuSampleSummary(RenderSection.Opaque)}"
-            + $" | masked={profiler.GpuSampleSummary(RenderSection.Masked)} transparent={profiler.GpuSampleSummary(RenderSection.Transparent)}"
-            + $" | glow={profiler.GpuSampleSummary(RenderSection.Glow)} lightCulling={profiler.GpuSampleSummary(RenderSection.LightCulling)}"
-            + $" | exposure={profiler.GpuSampleSummary(RenderSection.Exposure)} display={profiler.GpuSampleSummary(RenderSection.DisplayTransform)}"
-            + $" | aa={profiler.GpuSampleSummary(RenderSection.PostAntiAliasing)} prepass={profiler.GpuSampleSummary(RenderSection.Prepass)}"
+            + " | mode=target-boundaries"
+            + $" | skyTarget={profiler.GpuSampleSummary(RenderSection.SkyTarget)} hdrToDisplay={profiler.GpuSampleSummary(RenderSection.HdrToDisplay)}"
+            + $" | totalRaw={profiler.GpuSampleSummary(RenderSection.SceneTotal)} worldRaw={profiler.GpuSampleSummary(RenderSection.Frame)}"
+            + $" | displayRaw={profiler.GpuSampleSummary(RenderSection.DisplayTransform)} aaRaw={profiler.GpuSampleSummary(RenderSection.PostAntiAliasing)}"
             + $" | resetMissed={profiler.GpuResetMissed} readMissed={profiler.GpuResultsMissed}");
     }
 

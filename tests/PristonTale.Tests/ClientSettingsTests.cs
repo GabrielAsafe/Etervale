@@ -20,6 +20,7 @@ internal static class ClientSettingsTests
         yield return ("mobile graphics defaults and explicit choices preserve unrelated settings", MobileGraphicsAsync);
         yield return ("optional Android depth prepass preserves required rendering paths", OptionalDepthPrepassAsync);
         yield return ("GPU diagnostics distinguish absent samples from zero elapsed time", GpuProbeAsync);
+        yield return ("GPU diagnostics group mobile target intervals without changing desktop sections", GpuTargetBoundariesAsync);
         yield return ("a texture named with another extension is found in the subfolder its name points to", TextureExtensionAsync);
         yield return ("opening textures use only a configured Ricarten directory fallback after the source folder", TextureScopedFallbackAsync);
         yield return ("opening NPC E resolves only mm.bmp through the original TN-006 model directory", OpeningNpcTextureFallbackAsync);
@@ -304,6 +305,32 @@ internal static class ClientSettingsTests
         Assert.True(profiler.GpuSampleSummary(RenderSection.SceneTotal) == "n/a", "missing GPU result was presented as zero");
         profiler.ResetAverages();
         Assert.True(profiler.GpuResetMissed == 0 && profiler.GpuResultsMissed == 0, "empty probe has missed results");
+        return Task.CompletedTask;
+    }
+
+    private static Task GpuTargetBoundariesAsync()
+    {
+        foreach (var section in new[] { RenderSection.Sky, RenderSection.Opaque, RenderSection.Masked, RenderSection.Transparent, RenderSection.Glow })
+        {
+            Assert.True(!PristonFrameProfiler.ShouldTimeGpu(section, true), $"mobile issued an ambiguous GPU section: {section}");
+            Assert.True(PristonFrameProfiler.ShouldTimeGpu(section, false), $"desktop lost a GPU section: {section}");
+        }
+        foreach (var section in new[] { RenderSection.SkyTarget, RenderSection.HdrToDisplay })
+        {
+            Assert.True(PristonFrameProfiler.ShouldTimeGpu(section, true), $"mobile target interval missing: {section}");
+            Assert.True(!PristonFrameProfiler.ShouldTimeGpu(section, false), $"desktop enabled a mobile-only interval: {section}");
+        }
+        Assert.True(PristonFrameProfiler.ShouldTimeGpu(RenderSection.SceneTotal, true), "mobile total interval missing");
+        Assert.True(PristonFrameProfiler.ShouldTimeGpu(RenderSection.DisplayTransform, true), "mobile raw display interval missing");
+        Assert.True(!PristonFrameProfiler.ShouldTimeGpu(RenderSection.Update, true), "CPU-only update was timed on GPU");
+        using var profiler = new PristonFrameProfiler();
+        profiler.BeginFrame(true);
+        Assert.True(profiler.UsesTargetBoundaryGpuTiming, "mobile frame did not enable target timing");
+        profiler.Begin(RenderSection.SkyTarget);
+        profiler.End(RenderSection.SkyTarget);
+        Assert.True(profiler.GpuSampleSummary(RenderSection.SkyTarget) == "n/a", "CPU marker reported as GPU time");
+        profiler.BeginFrame();
+        Assert.True(!profiler.UsesTargetBoundaryGpuTiming, "desktop timing mode was not restored");
         return Task.CompletedTask;
     }
 

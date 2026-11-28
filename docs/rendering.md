@@ -457,9 +457,19 @@ they took the domes.
 - `Profiler` (`PristonFrameProfiler`): CPU time per `RenderSection`; GPU time from Vulkan timestamps after
   `EnableGpuTimers` (benchmark or Android gameplay diagnostic), read back 4 frames later without waiting.
   The temporary Android probe logs cumulative GPU milliseconds/sample counts under `ETERVALE_PERF` while F9 is visible.
-  `SceneTotal` spans renderer draw, effects and composition, but excludes HUD and presentation. Absent results are `n/a`;
-  reset and read misses are counted separately. Repeated sections retain the first completed GPU query pair for the frame.
-  GPU timestamp intervals may overlap; they are not additive and can include gaps between commands.
+  Android target-boundary mode measures `SkyTarget` from the existing sky-target bind to the HDR bind, and
+  `HdrToDisplay` from that HDR bind through world geometry, effects and optional HDR post work, before binding
+  the display output. Its last timestamp may be deferred to the end of the last HDR pass, but it is not recorded
+  in the output pass.
+  The separate sky interval is absent when no dome is drawn; physical-sky preparation and shadow work before the dome
+  are outside it. CPU section timers remain unchanged. Fine-grained GPU sections inside a live render pass are not
+  issued in this mode: tile-based GPUs can defer bottom-of-pipe timestamps to the end of the pass.
+  `totalRaw`, `worldRaw`, `displayRaw` and `aaRaw` retain command-position intervals for continuity with earlier logs.
+  `SceneTotal` markers bracket renderer draw, effects and composition; deferred execution can include subsequent HUD
+  work in the same pass. These are raw intervals, not isolated GPU costs, and they exclude no guaranteed amount of HUD
+  time. No extra render-target switches, barriers or waits are introduced. Desktop profiling retains its sections.
+  Absent results are `n/a`; reset and read misses are counted separately. Repeated sections retain the first completed
+  GPU query pair for the frame. GPU timestamp intervals may overlap; they are not additive and can include gaps between commands.
   Durations use the selected queue family's timestamp width; unsupported queues leave GPU timing unavailable.
 - `LastStreamingStats`: per `StreamingStep` count, total and worst main-thread milliseconds and bytes of the last stage
   upload (`[Stream] upload steps` log line).

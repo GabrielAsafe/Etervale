@@ -135,6 +135,12 @@ internal sealed class PristonPostProcessor : IDisposable
 
         Profiler?.End(RenderSection.Bloom);
 
+        if (Profiler is { UsesTargetBoundaryGpuTiming: true } profiler)
+        {
+            // The last HDR commands are recorded. A discard-contents output bind could open a new render pass.
+            profiler.End(RenderSection.HdrToDisplay);
+        }
+
         var filter = settings.AntiAliasing is AntiAliasingMode.Fxaa or AntiAliasingMode.Smaa;
         Profiler?.Begin(RenderSection.DisplayTransform);
         var viewport = frame.Viewport;

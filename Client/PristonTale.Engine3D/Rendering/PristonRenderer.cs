@@ -667,7 +667,7 @@ public sealed partial class PristonRenderer : IDisposable
                 _log.Info($"[ETV] M1.4.3 GPU timers unavailable: {error.GetType().Name}");
             }
         }
-        Profiler.BeginFrame();
+        Profiler.BeginFrame(profileGpu);
         if (_mobileGpuProbe && Profiler.GpuTimersAvailable)
         {
             Profiler.Begin(RenderSection.SceneTotal);
@@ -810,7 +810,8 @@ public sealed partial class PristonRenderer : IDisposable
         Profiler.Begin(RenderSection.Sky);
         if (skyVisible)
         {
-            _sceneTargets.BeginSky(SkyColor, PristonSceneTargets.SkyTargetFormat(OperatingSystem.IsAndroid(), FieldSky, PhysicalSkyShown));
+            _sceneTargets.BeginSky(SkyColor, PristonSceneTargets.SkyTargetFormat(OperatingSystem.IsAndroid(), FieldSky, PhysicalSkyShown),
+                profileGpu ? Profiler : null);
             _stateCache.InvalidateDeviceState();
             var skyView = frame.View;
             skyView.Translation = Vector3.Zero;
@@ -831,7 +832,7 @@ public sealed partial class PristonRenderer : IDisposable
                 ref visibleStaticMeshDiagnostics);
         }
 
-        _sceneTargets.Fill(skyVisible, displayScale / SkyFlash, skyRadiance * SkyFlash);
+        _sceneTargets.Fill(skyVisible, displayScale / SkyFlash, skyRadiance * SkyFlash, profileGpu ? Profiler : null);
         Profiler.End(RenderSection.Sky);
 
         _stateCache.InvalidateDeviceState();

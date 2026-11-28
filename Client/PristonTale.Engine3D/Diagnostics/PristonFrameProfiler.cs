@@ -31,7 +31,9 @@ public enum RenderSection
     Environment,
     Reflections,
     Volumetric,
-    SceneTotal
+    SceneTotal,
+    SkyTarget,
+    HdrToDisplay
 }
 
 // Per-section CPU time of every frame and, once enabled, GPU time from Vulkan timestamps written into the frame's own
@@ -58,6 +60,7 @@ public sealed class PristonFrameProfiler : IDisposable
     private bool _frameOpen;
 
     public bool GpuTimersAvailable => _queries is not null;
+    public bool UsesTargetBoundaryGpuTiming { get; private set; }
     public int GpuResultsMissed { get; private set; }
     public int GpuResetMissed { get; private set; }
 
@@ -83,8 +86,9 @@ public sealed class PristonFrameProfiler : IDisposable
         return true;
     }
 
-    public void BeginFrame()
+    public void BeginFrame(bool targetBoundaries = false)
     {
+        UsesTargetBoundaryGpuTiming = targetBoundaries;
         if (_frameOpen)
         {
             CloseCpuFrame();
@@ -117,7 +121,7 @@ public sealed class PristonFrameProfiler : IDisposable
     public void Begin(RenderSection section)
     {
         var index = (int)section;
-        if (_queries is not null && _frameOpen && _slotTimed && SubmitsGpuWork(section))
+        if (_queries is not null && _frameOpen && _slotTimed && ShouldTimeGpu(section, UsesTargetBoundaryGpuTiming))
         {
             var query = _slot * SectionCount + index;
             // A Vulkan timestamp must not be written twice without a reset.
@@ -144,8 +148,13 @@ public sealed class PristonFrameProfiler : IDisposable
         }
     }
 
-    private static bool SubmitsGpuWork(RenderSection section) =>
-        section is not (RenderSection.Update or RenderSection.Lighting or RenderSection.Queue);
+    // Tile-based GPUs may defer timestamps inside a live render pass until its end.
+    // Only target boundaries and explicitly raw aggregate intervals are reported in the mobile probe.
+    internal static bool ShouldTimeGpu(RenderSection section, bool targetBoundaries) => targetBoundaries
+        ? section is RenderSection.SkyTarget or RenderSection.HdrToDisplay or RenderSection.SceneTotal
+            or RenderSection.Frame or RenderSection.DisplayTransform or RenderSection.PostAntiAliasing
+        : section is not (RenderSection.Update or RenderSection.Lighting or RenderSection.Queue
+            or RenderSection.SkyTarget or RenderSection.HdrToDisplay);
 
     public double CpuLast(RenderSection section) => _cpuLast[(int)section];
 
