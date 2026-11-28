@@ -96,7 +96,7 @@ float ShadowTent(Texture2D<float4> map, SamplerState state, float2 texel, float2
 
 // Visibility of one cascade. The atlas tile holds the orthographic light's z (Passes/Surface.fx ShadowCaster), which is
 // linear in light-space depth; D3D clip conventions (the Vulkan compiler flips Y), so uv = (x, -y) * 0.5 + 0.5.
-float CascadeVisibility(uint c, float3 worldPosition, float3 normal, float nl, float2x2 rotation, float receiverBias)
+float CascadeVisibility(uint c, float3 worldPosition, float3 normal, float nl, float2 pixel, float receiverBias)
 {
     float texelWorld = CascadeTexelWorld[c];
     float depthRange = CascadeDepthRange[c];
@@ -141,6 +141,10 @@ float CascadeVisibility(uint c, float3 worldPosition, float3 normal, float nl, f
     [branch]
     if (disk > 0.0)
     {
+        // Only the wide PCSS disk needs a rotated sampling pattern.
+        float angle = PixelNoise(pixel) * 2.0 * PI;
+        float2 direction = float2(cos(angle), sin(angle));
+        float2x2 rotation = float2x2(direction.x, -direction.y, direction.y, direction.x);
         float2 lo = tile.xy + texel;
         float2 hi = tile.xy + tile.zw - texel;
         float width = min(radius, PcssMaxRadiusTexels);
@@ -180,7 +184,6 @@ float SunShadow(float3 worldPosition, float3 normal, float nl, float viewDepth, 
         c += (k + 1 < count && viewDepth >= CascadeSplits[k]) ? 1 : 0;
     }
 
-    float noise = PixelNoise(pixel);
     float split = CascadeSplits[c];
     float start = c == 0 ? 0.0 : CascadeSplits[c - 1];
     float band = (split - viewDepth) / max((split - start) * CascadeBlendBand, 1.0e-3);
@@ -198,14 +201,11 @@ float SunShadow(float3 worldPosition, float3 normal, float nl, float viewDepth, 
         }
     }
 
-    float angle = noise * 2.0 * PI;
-    float2 direction = float2(cos(angle), sin(angle));
-    float2x2 rotation = float2x2(direction.x, -direction.y, direction.y, direction.x);
-    float visibility = CascadeVisibility(c, worldPosition, normal, nl, rotation, receiverBias);
+    float visibility = CascadeVisibility(c, worldPosition, normal, nl, pixel, receiverBias);
     [branch]
     if (next > 0.0)
     {
-        visibility = lerp(visibility, CascadeVisibility(c + 1, worldPosition, normal, nl, rotation, receiverBias), next);
+        visibility = lerp(visibility, CascadeVisibility(c + 1, worldPosition, normal, nl, pixel, receiverBias), next);
     }
 
     return min(1.0 - ShadowParams.w * (1.0 - visibility) * fade, contact);
@@ -308,6 +308,13 @@ uint LocalLightMask(float2 pixel)
 void AddLocalLights(float3 worldPosition, float3 n, float3 v, float3 albedo, float3 f0, float metallic, float a,
                     float2 pixel, bool lampShadows, inout Lighting lighting)
 {
+    // The common unlit-by-lamps frame needs neither the tile lookup nor the light loop.
+    [branch]
+    if (LocalLightCount <= 0.0)
+    {
+        return;
+    }
+
     uint transients = (uint)TransientLightCount;
     uint mask = LocalLightMask(pixel);
     [loop]

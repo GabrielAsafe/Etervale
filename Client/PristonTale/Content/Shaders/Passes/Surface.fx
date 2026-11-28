@@ -339,6 +339,7 @@ float4 ShadeSurface(VSOut i, bool masked)
 #else
     Surface s = SampleSurface(i.Uv.xy, i.Uv.zw, i.Color, i.Normal, VisibleFaceNormal(i.WorldPosition, v));
     float etvAO = 1.0;
+    [branch]
     if (EtvPbrEnabled > 0.5)
     {
         float3 orm = EtvPbrOrmMap.Sample(EtvPbrOrmSampler, i.Uv.xy).rgb;
@@ -354,7 +355,6 @@ float4 ShadeSurface(VSOut i, bool masked)
         AlphaTest(s.Alpha);
     }
 
-    float a = SpecularAntiAliasedAlpha(s.Normal, max(s.Roughness * s.Roughness, 0.002));
     // Emission: the original display-referred colour at its authored level by day (EmissionScale >= 1 / Exposure), a
     // brighter light source at night.
     float emission = (MaterialBlink > 0.5 ? BlinkPulse : 1.0) * EmissionScale;
@@ -364,7 +364,6 @@ float4 ShadeSurface(VSOut i, bool masked)
     {
         emission = (MaterialBlink > 0.5 ? BlinkPulse : 1.0) / Exposure;
     }
-    float rim = pow(1.0 - saturate(dot(s.Normal, v)), 3.0);
     float3 radiance;
     Lighting lighting;
     lighting.Diffuse = 0.0;
@@ -381,6 +380,7 @@ float4 ShadeSurface(VSOut i, bool masked)
     }
     else
     {
+        float a = SpecularAntiAliasedAlpha(s.Normal, max(s.Roughness * s.Roughness, 0.002));
         float nl = saturate(dot(s.Normal, SunDirection));
         float back = saturate(-dot(s.Normal, SunDirection));
         float2 occlusion = ScreenOcclusion(i.Position.xy, i.ViewDepth);
@@ -401,12 +401,22 @@ float4 ShadeSurface(VSOut i, bool masked)
         float3 shadowNormal = transmits ? -s.Normal : s.Normal;
         // Actors take no contact shadows: a march across their own thin bodies would shade them by view and pose.
         bool actor = ActorReceiver > 0.5;
-        float shadow = SunShadow(i.WorldPosition, shadowNormal, max(nl, transmits ? back : 0.0), i.ViewDepth, i.Position.xy,
-            actor ? ActorShadowBias : 0.0, actor ? 1.0 : occlusion.y) * CloudShadowAt(i.WorldPosition);
-        AddDirectLight(SunDirection, SunColor * shadow, s.Normal, v, diffuseAlbedo, s.F0, s.Metallic, a, lighting.Diffuse, lighting.Specular);
-        // Transmission through leaves: diffuse through the blade, stronger looking toward the sun (forward scattering).
-        float forward = pow(saturate(dot(-v, SunDirection)), 4.0);
-        lighting.Diffuse += diffuseAlbedo * SunColor * (shadow * Translucency * back * (0.35 + 0.65 * forward));
+        float shadow = 1.0;
+        // Every direct-sun term below is multiplied by SunColor. No shadow lookup or BRDF is needed at zero radiance.
+        [branch]
+        if (any(SunColor != 0.0))
+        {
+            shadow = SunShadow(i.WorldPosition, shadowNormal, max(nl, transmits ? back : 0.0), i.ViewDepth, i.Position.xy,
+                actor ? ActorShadowBias : 0.0, actor ? 1.0 : occlusion.y) * CloudShadowAt(i.WorldPosition);
+            AddDirectLight(SunDirection, SunColor * shadow, s.Normal, v, diffuseAlbedo, s.F0, s.Metallic, a, lighting.Diffuse, lighting.Specular);
+            // Transmission through leaves uses forward scattering only for a transmissive material.
+            [branch]
+            if (Translucency != 0.0)
+            {
+                float forward = pow(saturate(dot(-v, SunDirection)), 4.0);
+                lighting.Diffuse += diffuseAlbedo * SunColor * (shadow * Translucency * back * (0.35 + 0.65 * forward));
+            }
+        }
         AddLocalLights(i.WorldPosition, s.Normal, v, diffuseAlbedo, s.F0, s.Metallic, a, i.Position.xy, ActorReceiver < 0.5, lighting);
 #ifdef GLTF
         // A glTF vertex colour tints the surface (SampleGltfSurface); it is no light.
@@ -432,7 +442,12 @@ float4 ShadeSurface(VSOut i, bool masked)
 #endif
     }
 
-    radiance += RimColor * (rim / Exposure);
+    [branch]
+    if (any(RimColor != 0.0))
+    {
+        float rim = pow(1.0 - saturate(dot(s.Normal, v)), 3.0);
+        radiance += RimColor * (rim / Exposure);
+    }
     // Gameplay tints add (or take away) light in the original display units, like the original colour adjustment.
     radiance = max(radiance + s.Albedo * (ActorTint.rgb / Exposure), 0.0);
     [branch]

@@ -237,6 +237,11 @@ layer only when their full material keys agree (including the description, blend
 The first merge entry reuses its existing corner list; subsequent compatible groups append their corners. Sky layers reuse
 parsed models for repeated paths without changing the authored per-layer tint.
 
+The surface shaders skip local-light evaluation at zero light count, direct-sun work at exactly zero sun radiance,
+leaf transmission for non-transmissive materials and the rim term when no rim is set. PCSS rotates its sample pattern
+only for the wide disk; PCF and the narrow tent do not need it. The original lighting equations, material inputs,
+shadow filter, HDR target format and display transform remain unchanged.
+
 ## Render targets
 
 The Android classic field sky uses `SurfaceFormat.Color` (RGBA8 UNORM, not a hardware sRGB target).
