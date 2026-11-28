@@ -19,19 +19,23 @@ internal sealed class PristonGpuMeshBuilder
         PristonMeshDiagnostics Diagnostics,
         BoundingBox Bounds);
 
-    public PristonGpuMesh CreateStaticMesh(PristonCornerVertex[] vertices)
+    public PristonGpuMesh CreateStaticMesh(ReadOnlySpan<PristonCornerVertex> vertices)
     {
         return Upload(PrepareStaticMesh(vertices));
     }
 
-    public PreparedMesh PrepareStaticMesh(PristonCornerVertex[] vertices)
+    public PreparedMesh PrepareStaticMesh(ReadOnlySpan<PristonCornerVertex> vertices)
     {
         var uniqueVertices = new List<PristonCornerVertex>(vertices.Length);
         var vertexLookup = new Dictionary<PristonCornerVertex, int>(vertices.Length);
         var indices = new int[vertices.Length];
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
         for (var i = 0; i < vertices.Length; i++)
         {
             var vertex = vertices[i];
+            min = Vector3.Min(min, vertex.Position);
+            max = Vector3.Max(max, vertex.Position);
             if (!vertexLookup.TryGetValue(vertex, out var index))
             {
                 index = uniqueVertices.Count;
@@ -46,7 +50,7 @@ internal sealed class PristonGpuMeshBuilder
             BuildStaticVertices(uniqueVertices, indices),
             indices,
             CalculateDiagnostics(uniqueVertices, indices),
-            PristonBinaryUtil.BoundsFrom(vertices.Select(static vertex => vertex.Position)));
+            vertices.IsEmpty ? new BoundingBox(Vector3.Zero, Vector3.Zero) : new BoundingBox(min, max));
     }
 
     internal static long EstimateBytes(PreparedMesh prepared)

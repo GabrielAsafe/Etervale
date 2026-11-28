@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using PristonTale.Engine3D.Diagnostics;
@@ -160,7 +161,7 @@ public sealed class PristonSkyLibrary : IDisposable
 
     private PristonGpuMesh Upload(PristonGpuMeshBuilder builder, List<PristonCornerVertex> vertices)
     {
-        var mesh = builder.Upload(builder.PrepareStaticMesh(vertices.ToArray()));
+        var mesh = builder.Upload(builder.PrepareStaticMesh(CollectionsMarshal.AsSpan(vertices)));
         _meshes.Add(mesh);
         MeshBytes += mesh.VertexBuffer.VertexDeclaration.VertexStride * (long)mesh.VertexCount;
         MeshBytes += mesh.IndexCount * (long)(mesh.IndexBuffer.IndexElementSize == IndexElementSize.SixteenBits ? 2 : 4);

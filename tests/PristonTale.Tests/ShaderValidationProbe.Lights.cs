@@ -37,6 +37,21 @@ internal sealed partial class ShaderValidationProbe
         tiles.Masks.GetData<uint>(masks.AsSpan());
         centre = masks[(tiles.TilesAcross / 2) * tiles.TilesAcross + tiles.TilesAcross / 2];
         Assert.True(centre == 3u, $"light culling without depth: centre tile mask {centre} (expected 3)");
-        _verified += 2;
+        var dispatched = culling.DispatchCount;
+        lights[0] = lights[0] with { Color = Vector3.Zero, Intensity = 0f };
+        tiles = culling.Run(lights, view, projection, 1f, 10000f, width, height, null, _white);
+        tiles.Masks.GetData<uint>(masks.AsSpan());
+        var centreIndex = (tiles.TilesAcross / 2) * tiles.TilesAcross + tiles.TilesAcross / 2;
+        Assert.True(culling.DispatchCount == dispatched && masks[centreIndex] == 3u, "unchanged no-depth masks were not reused");
+
+        lights[1] = lights[1] with { Position = new Vector3(3000f, 0f, -500f) };
+        tiles = culling.Run(lights, view, projection, 1f, 10000f, width, height, null, _white);
+        tiles.Masks.GetData<uint>(masks.AsSpan());
+        Assert.True(culling.DispatchCount == dispatched + 1 && masks[centreIndex] == 1u, "moving a light did not invalidate its mask");
+        culling.Run(lights, view, projection, 1f, 10000f, width, height, depth, _white);
+        culling.Run(lights, view, projection, 1f, 10000f, width, height, depth, _white);
+        culling.Run(lights, view, projection, 1f, 10000f, width, height, null, _white);
+        Assert.True(culling.DispatchCount == dispatched + 4, "depth dispatches must never reuse masks or leave a valid no-depth cache");
+        _verified += 4;
     }
 }

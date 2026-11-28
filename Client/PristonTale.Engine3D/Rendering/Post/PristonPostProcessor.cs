@@ -38,14 +38,14 @@ internal sealed class PristonPostProcessor : IDisposable
     private void H700EnsureBloom()
     {
         if (_bloom is not null) return;
-        System.Console.WriteLine("[H700 LOWFX] LOAD Bloom por necessidade");
+        _log.Info("[Rendering] Load Bloom on first use.");
         _bloom = new PristonBloom(_device, _triangle, PristonShaderLibrary.LoadRequired(_h700Content, PristonBloom.Asset, _log));
     }
 
     private void H700EnsureSmaa()
     {
         if (_smaa is not null) return;
-        System.Console.WriteLine("[H700 LOWFX] LOAD SMAA por necessidade");
+        _log.Info("[Rendering] Load SMAA on first use.");
         _smaa = new PristonSmaa(_device, _triangle, PristonShaderLibrary.LoadRequired(_h700Content, PristonSmaa.Asset, _log));
     }
 
@@ -88,15 +88,15 @@ internal sealed class PristonPostProcessor : IDisposable
         _toneParams = _final.Parameters["ToneParams"];
         _debugParams = _final.Parameters["DebugParams"];
         _mesopicParams = _final.Parameters["MesopicParams"];
-        if (!_h700LowFx)
+        if (!_h700LowFx && !OperatingSystem.IsAndroid())
             _bloom = new PristonBloom(device, triangle, PristonShaderLibrary.LoadRequired(content, PristonBloom.Asset, log));
         else
-            System.Console.WriteLine("[H700 LOWFX] DEFER Bloom");
+            _log.Info("[Rendering] Defer Bloom until first use.");
         TraceH700Scene("02 Bloom FX");
-        if (!_h700LowFx)
+        if (!_h700LowFx && !OperatingSystem.IsAndroid())
             _smaa = new PristonSmaa(device, triangle, PristonShaderLibrary.LoadRequired(content, PristonSmaa.Asset, log));
         else
-            System.Console.WriteLine("[H700 LOWFX] DEFER SMAA");
+            _log.Info("[Rendering] Defer SMAA until first use.");
         TraceH700Scene("03 SMAA FX + tabelas");
         Exposure = new PristonAutoExposure(device, PristonShaderLibrary.LoadRequired(content, PristonAutoExposure.Asset, log));
         TraceH700Scene("04 AutoExposure FX + buffers");

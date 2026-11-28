@@ -382,9 +382,9 @@ public sealed partial class PristonRenderer
             var batches = new List<PreparedStaticBatch>(pending.Count);
             foreach (var (material, vertices) in pending)
             {
-                var array = vertices.ToArray();
-                var mesh = material.TextureFormState == 0 ? cpuBuilder.PrepareStaticMesh(array) : null;
-                var dynamicVertices = mesh is null ? ToDynamicVertices(array) : [];
+                var corners = CollectionsMarshal.AsSpan(vertices);
+                var mesh = material.TextureFormState == 0 ? cpuBuilder.PrepareStaticMesh(corners) : null;
+                var dynamicVertices = mesh is null ? ToDynamicVertices(corners) : [];
                 batches.Add(new PreparedStaticBatch(material, mesh, dynamicVertices, CanAggregateShadow(material)));
             }
 
@@ -437,7 +437,7 @@ public sealed partial class PristonRenderer
 
         foreach (var cell in collector.OrderedCells())
         {
-            var mesh = _meshBuilder.CreateStaticMesh(cell.ToArray());
+            var mesh = _meshBuilder.CreateStaticMesh(CollectionsMarshal.AsSpan(cell));
             handle.ShadowBatches.Add(new RenderBatch([], [], mesh, collector.Material, ForceCastsShadow: true));
         }
     }
@@ -452,13 +452,13 @@ public sealed partial class PristonRenderer
             yield break;
         }
 
-        var cells = collector.OrderedCells().Select(static cell => cell.ToArray()).ToArray();
+        var cells = collector.OrderedCells().ToArray();
         var preparation = Task.Run(() =>
         {
             var prepared = new PristonGpuMeshBuilder.PreparedMesh[cells.Length];
             for (var index = 0; index < cells.Length; index++)
             {
-                prepared[index] = cpuBuilder.PrepareStaticMesh(cells[index]);
+                prepared[index] = cpuBuilder.PrepareStaticMesh(CollectionsMarshal.AsSpan(cells[index]));
             }
 
             return prepared;

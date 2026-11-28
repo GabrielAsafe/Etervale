@@ -79,7 +79,7 @@ public sealed partial class PristonRenderer
         }
         if (_physicalSky is null)
         {
-            System.Console.WriteLine("[H700 LOWFX] LOAD PhysicalSky por necessidade");
+            _log.Info("[Rendering] Load PhysicalSky on first use.");
             _physicalSky = new PristonPhysicalSky(_graphicsDevice, _h700FxContent, _sceneTargets.Triangle, _log);
         }
 

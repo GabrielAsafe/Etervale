@@ -8,6 +8,7 @@ internal static class RenderFidelityTests
     public static IEnumerable<(string, Func<Task>)> Cases()
     {
         yield return ("mip chains reach 1x1 for every texture and average colour in linear light", MipChainLinearAsync);
+        yield return ("loading optimizations: opaque mip chain matches unweighted linear colour at every level", OpaqueMipAsync);
         yield return ("mip chains weight colour by alpha so transparent key colours do not bleed", MipChainAlphaWeightedAsync);
         yield return ("cutout mip chains preserve the base alpha-test coverage", MipChainCoverageAsync);
         yield return ("data mip chains average the stored values and keep each packed normal pair a unit direction", MipChainDataAsync);
@@ -61,6 +62,31 @@ internal static class RenderFidelityTests
         Assert.True(profiler.CpuLast(PristonTale.Engine3D.Diagnostics.RenderSection.Opaque) > 0, "CPU section was not recorded");
         Assert.True(profiler.CpuMeans().ContainsKey("Opaque") && !profiler.CpuMeans().ContainsKey("Sky"), "unused sections must be omitted");
         Assert.True(!profiler.GpuTimersAvailable && profiler.GpuMeans().Count == 0, "GPU timers must stay off until enabled on the render thread");
+        return Task.CompletedTask;
+    }
+
+    private static Task OpaqueMipAsync()
+    {
+        foreach (var (width, height) in new[] { (1, 1), (1, 9), (7, 5), (16, 16) })
+        {
+            var pixels = new Color[width * height];
+            for (var i = 0; i < pixels.Length; i++)
+            {
+                pixels[i] = new Color((byte)(i * 17), (byte)(i * 73), (byte)(i * 113), (byte)255);
+            }
+
+            var expected = PristonMipChain.BuildColourAndData(pixels, width, height);
+            foreach (var cutoff in new byte[] { 0, 128 })
+            {
+                var actual = PristonMipChain.Build(pixels, width, height, cutoff);
+                Assert.True(actual.Length == expected.Length && ReferenceEquals(actual[0], pixels), "base level changed");
+                for (var level = 0; level < actual.Length; level++)
+                {
+                    Assert.True(actual[level].SequenceEqual(expected[level]), "opaque mip pixels changed");
+                }
+            }
+        }
+
         return Task.CompletedTask;
     }
 

@@ -15,17 +15,23 @@ internal static class PristonMipChain
 
     public static Color[][] Build(Color[] pixels, int width, int height, byte alphaCutoff)
     {
-        var levels = new List<Color[]> { pixels };
-        var baseCoverage = alphaCutoff == 0 ? -1f : Coverage(pixels, alphaCutoff);
+        if (width == 1 && height == 1)
+        {
+            return [pixels];
+        }
+
+        var levels = new List<Color[]>(LevelCount(width, height)) { pixels };
+        var opaque = IsOpaque(pixels);
+        var baseCoverage = alphaCutoff == 0 || opaque ? -1f : Coverage(pixels, alphaCutoff);
         var preserveCoverage = baseCoverage is > 0f and < 1f;
         var premultiplied = ToLinear(pixels, premultiply: true);
-        var straight = ToLinear(pixels, premultiply: false);
+        var straight = opaque ? premultiplied : ToLinear(pixels, premultiply: false);
         while (width > 1 || height > 1)
         {
             var nextWidth = Math.Max(1, width / 2);
             var nextHeight = Math.Max(1, height / 2);
             premultiplied = Downsample(premultiplied, width, height, nextWidth, nextHeight);
-            straight = Downsample(straight, width, height, nextWidth, nextHeight);
+            straight = opaque ? premultiplied : Downsample(straight, width, height, nextWidth, nextHeight);
             var alphaScale = preserveCoverage ? FindCoverageScale(premultiplied, baseCoverage, alphaCutoff) : 1f;
             levels.Add(ToColors(premultiplied, straight, alphaScale));
             width = nextWidth;
@@ -141,6 +147,19 @@ internal static class PristonMipChain
     {
         var index = (int)(Math.Clamp(value, 0f, 1f) * (LinearToSrgbSteps - 1) + 0.5f);
         return LinearToSrgbTable[index];
+    }
+
+    private static bool IsOpaque(Color[] pixels)
+    {
+        for (var index = 0; index < pixels.Length; index++)
+        {
+            if (pixels[index].A != 255)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static Vector4[] ToLinear(Color[] pixels, bool premultiply)

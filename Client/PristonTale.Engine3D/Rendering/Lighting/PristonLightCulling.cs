@@ -21,6 +21,11 @@ internal sealed class PristonLightCulling : IDisposable
     private readonly EffectParameter _tileMasks;
     private readonly Vector4[] _positions = new Vector4[PristonShaderLibrary.MaxLocalLightCount];
     private StructuredBuffer _masks;
+    private LightGridKey? _cachedGrid;
+
+    private readonly record struct LightGridKey(Matrix View, Vector4 Projection, int Width, int Height, int Count);
+
+    internal long DispatchCount { get; private set; }
 
     public PristonLightCulling(GraphicsDevice device, Effect effect)
     {
@@ -51,14 +56,25 @@ internal sealed class PristonLightCulling : IDisposable
         EnsureBuffer(tilesX * tilesY);
         TilesAcross = tilesX;
         var count = Math.Min(lights.Count, _positions.Length);
-        Array.Clear(_positions);
+        var key = new LightGridKey(view, new Vector4(projection.M11, projection.M22, near, far), width, height, count);
+        var same = linearDepth is null && _cachedGrid == key;
         for (var i = 0; i < count; i++)
         {
-            _positions[i] = new Vector4(lights[i].Position, lights[i].Radius);
+            var sphere = new Vector4(lights[i].Position, lights[i].Radius);
+            same &= _positions[i] == sphere;
+            _positions[i] = sphere;
         }
 
+        // With no depth input the mask depends only on the ordered spheres and tile frusta, not their colours.
+        if (same)
+        {
+            return new PristonTileLights(_masks, tilesX, true);
+        }
+
+        _cachedGrid = null;
+        Array.Clear(_positions, count, _positions.Length - count);
         _view.SetValue(view);
-        _projection.SetValue(new Vector4(projection.M11, projection.M22, near, far));
+        _projection.SetValue(key.Projection);
         _grid.SetValue(new Vector4(tilesX, tilesY, count, linearDepth is null ? 0f : 1f));
         _target.SetValue(new Vector4(width, height, 0f, 0f));
         _lightPosition.SetValue(_positions);
@@ -66,6 +82,11 @@ internal sealed class PristonLightCulling : IDisposable
         _tileMasks.SetValue(_masks);
         _effect.CurrentTechnique.Passes[0].Apply();
         _device.Dispatch(tilesX, tilesY, 1);
+        DispatchCount++;
+        if (linearDepth is null)
+        {
+            _cachedGrid = key;
+        }
         return new PristonTileLights(_masks, tilesX, true);
     }
 
@@ -76,6 +97,7 @@ internal sealed class PristonLightCulling : IDisposable
             return;
         }
 
+        _cachedGrid = null;
         _masks?.Dispose();
         _masks = new StructuredBuffer(_device, sizeof(uint), tiles, BufferShaderAccess.ReadWrite);
     }

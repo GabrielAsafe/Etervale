@@ -218,6 +218,17 @@ already fill the budget. Queue construction computes sort keys and distances onl
 Actor motion end ticks use the clip's end when present, otherwise the skeleton's indexed last-frame scan. Building the
 stage floor-light grid accumulates bounds without allocating a temporary corner array per face.
 
+Without depth input, the light culling buffer is reused only for an identical view, projection parameters, target size
+and ordered light positions/radii. Colours and intensity do not affect the masks; every depth-based dispatch invalidates
+this cache. The HDR colour and depth formats remain unchanged.
+
+Mesh preparation reads the existing corner spans during sky and stage loading, without copying each list into an array.
+The welding pass also accumulates bounds. Streaming workers consume the completed lists without modifying them.
+Opaque texture mip chains share their premultiplied and straight linear levels; transparent textures keep both paths.
+The BRDF lookup pixels are generated once per process; each renderer owns a separate GPU texture. Android constructs
+optional physical sky, reflection, volumetric, screen occlusion, bloom, SMAA and temporal resources on first use rather
+than during bootstrap. This may move their initialization cost to the first frame that actually needs them.
+
 ## Render targets
 
 The Android classic field sky uses `SurfaceFormat.Color` (RGBA8 UNORM, not a hardware sRGB target).

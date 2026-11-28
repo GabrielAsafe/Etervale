@@ -230,33 +230,33 @@ public sealed partial class PristonRenderer : IDisposable
         else
             System.Console.WriteLine("[H700 LOWFX] DEFER Environment");
         H700Stage("13 reflections");
-        if (!_h700LowFx)
+        if (!_h700LowFx && !OperatingSystem.IsAndroid())
             _reflections = new PristonScreenReflections(graphicsDevice, _sceneTargets.Triangle,
                 PristonShaderLibrary.LoadRequired(content, PristonScreenReflections.Asset, _log));
         else
-            System.Console.WriteLine("[H700 LOWFX] DEFER Reflections");
+            _log.Info("[Rendering] Defer Reflections until first use.");
         H700Stage("14 volumetric");
-        if (!_h700LowFx)
+        if (!_h700LowFx && !OperatingSystem.IsAndroid())
             _volumetric = new PristonVolumetricLight(graphicsDevice, _sceneTargets.Triangle,
                 PristonShaderLibrary.LoadRequired(content, PristonVolumetricLight.Asset, _log));
         else
-            System.Console.WriteLine("[H700 LOWFX] DEFER Volumetric");
+            _log.Info("[Rendering] Defer Volumetric until first use.");
         H700Stage("15 light culling");
         if (!_h700LowFx)
             _lightCulling = new PristonLightCulling(graphicsDevice, PristonShaderLibrary.LoadRequired(content, PristonLightCulling.Asset, _log));
         else
             System.Console.WriteLine("[H700 LOWFX] DEFER LightCull");
         H700Stage("16 screen occlusion");
-        if (!_h700LowFx)
+        if (!_h700LowFx && !OperatingSystem.IsAndroid())
             _screenOcclusion = new PristonScreenOcclusion(graphicsDevice, _sceneTargets.Triangle,
                 PristonShaderLibrary.LoadRequired(content, PristonScreenOcclusion.Asset, _log));
         else
-            System.Console.WriteLine("[H700 LOWFX] DEFER ScreenOcclusion");
+            _log.Info("[Rendering] Defer ScreenOcclusion until first use.");
         H700Stage("17 physical sky / 3D noise");
-        if (!_h700LowFx)
+        if (!_h700LowFx && !OperatingSystem.IsAndroid())
             _physicalSky = new PristonPhysicalSky(graphicsDevice, content, _sceneTargets.Triangle, _log);
         else
-            System.Console.WriteLine("[H700 LOWFX] DEFER PhysicalSky");
+            _log.Info("[Rendering] Defer PhysicalSky until first use.");
         H700Stage("18 quality / shadow map");
         ApplyQuality(presentation?.Rendering ?? new ClientSettings());
         H700Stage("19 renderer constructor pronto");
@@ -277,7 +277,7 @@ public sealed partial class PristonRenderer : IDisposable
     private void H700EnsureReflections()
     {
         if (_reflections is not null) return;
-        System.Console.WriteLine("[H700 LOWFX] LOAD Reflections por necessidade");
+        _log.Info("[Rendering] Load Reflections on first use.");
         _reflections = new PristonScreenReflections(_graphicsDevice, _sceneTargets.Triangle,
             PristonShaderLibrary.LoadRequired(_h700FxContent, PristonScreenReflections.Asset, _log));
     }
@@ -285,7 +285,7 @@ public sealed partial class PristonRenderer : IDisposable
     private void H700EnsureVolumetric()
     {
         if (_volumetric is not null) return;
-        System.Console.WriteLine("[H700 LOWFX] LOAD Volumetric por necessidade");
+        _log.Info("[Rendering] Load Volumetric on first use.");
         _volumetric = new PristonVolumetricLight(_graphicsDevice, _sceneTargets.Triangle,
             PristonShaderLibrary.LoadRequired(_h700FxContent, PristonVolumetricLight.Asset, _log));
     }
@@ -301,7 +301,7 @@ public sealed partial class PristonRenderer : IDisposable
     private void H700EnsureScreenOcclusion()
     {
         if (_screenOcclusion is not null) return;
-        System.Console.WriteLine("[H700 LOWFX] LOAD ScreenOcclusion por necessidade");
+        _log.Info("[Rendering] Load ScreenOcclusion on first use.");
         _screenOcclusion = new PristonScreenOcclusion(_graphicsDevice, _sceneTargets.Triangle,
             PristonShaderLibrary.LoadRequired(_h700FxContent, PristonScreenOcclusion.Asset, _log));
     }

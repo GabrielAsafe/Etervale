@@ -553,9 +553,9 @@ public sealed partial class PristonRenderer
             }
             else
             {
-                var vertexArray = vertices.ToArray();
-                var mesh = runtimeMaterial.TextureFormState == 0 ? _meshBuilder.CreateStaticMesh(vertexArray) : null;
-                var dynamicVertices = mesh is null ? ToDynamicVertices(vertexArray) : [];
+                var corners = CollectionsMarshal.AsSpan(vertices);
+                var mesh = runtimeMaterial.TextureFormState == 0 ? _meshBuilder.CreateStaticMesh(corners) : null;
+                var dynamicVertices = mesh is null ? ToDynamicVertices(corners) : [];
                 target.Add(new RenderBatch(
                     dynamicVertices,
                     [],
@@ -567,8 +567,7 @@ public sealed partial class PristonRenderer
 
         foreach (var (_, entry) in merged)
         {
-            var vertexArray = entry.Vertices.ToArray();
-            var mesh = _meshBuilder.CreateStaticMesh(vertexArray);
+            var mesh = _meshBuilder.CreateStaticMesh(CollectionsMarshal.AsSpan(entry.Vertices));
             target.Add(new RenderBatch(
                 [],
                 [],
@@ -579,7 +578,7 @@ public sealed partial class PristonRenderer
     }
 
     // Unwelded per-triangle vertices for UV-form-state materials.
-    private static PristonStaticVertex[] ToDynamicVertices(PristonCornerVertex[] vertices)
+    private static PristonStaticVertex[] ToDynamicVertices(ReadOnlySpan<PristonCornerVertex> vertices)
     {
         var dynamicVertices = new PristonStaticVertex[vertices.Length];
         for (var i = 0; i < vertices.Length; i++)

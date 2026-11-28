@@ -15,6 +15,7 @@ internal static class RenderTests
         yield return ("off-camera geometry remains eligible to cast shadows", ShadowAsync);
         yield return ("render optimizations: floor light bounds include separated faces", FloorLightBoundsAsync);
         yield return ("static mesh preparation computes topology and normals without a GPU", MeshAsync);
+        yield return ("loading optimizations: mesh spans preserve topology and bounds without copying corners", MeshSpanAsync);
         yield return ("stage normals are smoothed across materials and faces sharing a position, not across a wall", StageNormalsAsync);
         yield return ("a stage face that is never drawn does not bend the drawn ground's normals", HiddenStageNormalsAsync);
         yield return ("CPU image decoding handles invalid data without GPU resources", DecodeAsync);
@@ -158,6 +159,22 @@ internal static class RenderTests
         Assert.True(all[2].Y < 0.999f, $"the fixture's ramp does not bend the ground when drawn: {all[2]}");
         Assert.True(drawn[2].Y > 0.9999f, $"a hidden ramp bent the ground's corner: {drawn[2]}");
         Assert.True(drawn[3] == Vector3.Zero, "a face that is not drawn received a normal");
+        return Task.CompletedTask;
+    }
+
+    private static Task MeshSpanAsync()
+    {
+        var a = new PristonCornerVertex(Vector3.Zero, Color.White, Vector2.Zero, Vector2.One, Vector2.Zero);
+        var b = a with { Position = Vector3.UnitZ };
+        var c = a with { Position = Vector3.UnitX };
+        var corners = new List<PristonCornerVertex> { a, b, c, a, b, c };
+        var builder = new PristonGpuMeshBuilder(null!);
+        var prepared = builder.PrepareStaticMesh(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(corners));
+        Assert.True(prepared.Indices.SequenceEqual(new[] { 0, 1, 2, 0, 1, 2 }), "corner order changed");
+        Assert.True(prepared.Vertices.Length == 3 && prepared.Vertices.All(v => v.Normal == Vector3.Up), "welding or normals changed");
+        Assert.True(prepared.Bounds.Min == Vector3.Zero && prepared.Bounds.Max == new Vector3(1, 0, 1), "span bounds changed");
+        var empty = builder.PrepareStaticMesh(ReadOnlySpan<PristonCornerVertex>.Empty);
+        Assert.True(empty.Bounds.Min == Vector3.Zero && empty.Bounds.Max == Vector3.Zero && empty.Indices.Length == 0, "empty mesh changed");
         return Task.CompletedTask;
     }
 

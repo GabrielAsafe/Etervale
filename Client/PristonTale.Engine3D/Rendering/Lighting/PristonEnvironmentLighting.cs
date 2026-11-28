@@ -240,7 +240,10 @@ internal sealed class PristonEnvironmentLighting : IDisposable
     }
 
     // rg the split-sum scale and bias, b the sheen's directional albedo.
-    private static Texture2D CreateBrdfLut(GraphicsDevice device)
+    // Device-independent immutable pixels; every renderer still owns and disposes its own GPU texture.
+    private static readonly Lazy<HalfVector4[]> BrdfPixels = new(BuildBrdfPixels);
+
+    private static HalfVector4[] BuildBrdfPixels()
     {
         var table = IntegrateBrdf(BrdfSize, 256);
         var sheen = IntegrateSheen(BrdfSize, 256);
@@ -250,8 +253,13 @@ internal sealed class PristonEnvironmentLighting : IDisposable
             packed[i] = new HalfVector4(table[i].X, table[i].Y, sheen[i], 0f);
         }
 
+        return packed;
+    }
+
+    private static Texture2D CreateBrdfLut(GraphicsDevice device)
+    {
         var texture = new Texture2D(device, BrdfSize, BrdfSize, false, SurfaceFormat.HalfVector4) { Name = "Split-sum BRDF" };
-        texture.SetData(packed);
+        texture.SetData(BrdfPixels.Value);
         return texture;
     }
 

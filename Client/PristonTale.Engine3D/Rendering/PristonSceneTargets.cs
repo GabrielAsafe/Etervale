@@ -85,11 +85,11 @@ internal sealed class PristonSceneTargets : IDisposable
         _backgroundRadiance = _skyComposite.Parameters["BackgroundRadiance"];
         _post = new PristonPostProcessor(device, content, log, _triangle);
         TraceH700Scene("03 postprocessor completo");
-        if (!_h700LowFx)
+        if (!_h700LowFx && !OperatingSystem.IsAndroid())
             _temporal = new PristonTemporalAntiAliasing(device, _triangle,
                 PristonShaderLibrary.LoadRequired(content, PristonTemporalAntiAliasing.Asset, log));
         else
-            System.Console.WriteLine("[H700 LOWFX] DEFER TemporalAA");
+            _h700Log.Info("[Rendering] Defer TemporalAA until first use.");
         TraceH700Scene("04 temporal AA FX");
         _bindCaller = BindCaller;
         BindAction = Bind;
@@ -141,7 +141,7 @@ internal sealed class PristonSceneTargets : IDisposable
         var samples = temporal || prepass ? 0 : multiSampleCount;
         if (temporal && _temporal is null)
         {
-            System.Console.WriteLine("[H700 LOWFX] LOAD TemporalAA por necessidade");
+            _h700Log.Info("[Rendering] Load TemporalAA on first use.");
             _temporal = new PristonTemporalAntiAliasing(_device, _triangle,
                 PristonShaderLibrary.LoadRequired(_h700Content, PristonTemporalAntiAliasing.Asset, _h700Log));
         }
