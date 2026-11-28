@@ -442,6 +442,14 @@ master, a message box) holds the player: `GameScene.MovementLocked` stops a walk
 Keys are polled with `Keyboard.GetState()` and edge-detected against the previous frame per consumer. Typed characters
 come from the window's text input (`Game1` to `GameClient.TypeCharacter` to `ScreenContext.TypedText`) and reach
 `TextInputField` on the login and name forms and the chat input line.
+Mobile virtual keys are merged with physical keys using reusable buffers indexed by the number of distinct keys.
+The first merge for a new key count may allocate; subsequent merges reuse that buffer. Each returned keyboard
+snapshot owns its bit fields and can be retained for edge detection without aliasing the buffer.
+
+Android performance logging reports `Update allocation last bytes` for the last gameplay update, split into
+preparation, mobile input and its actions, HUD, HUD-to-scene state and debug keys, scene update, and final state
+copy. These are game-thread byte deltas, not frame-window averages; work outside `GameplayScreen.Update` is not
+included. The line is emitted alongside the existing periodic GPU diagnostics, not on every update.
 
 ## HUD and windows
 

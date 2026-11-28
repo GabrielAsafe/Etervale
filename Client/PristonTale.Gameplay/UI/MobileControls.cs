@@ -19,6 +19,7 @@ internal sealed class MobileControls
     private readonly Queue<Touch> _events = new();
     private readonly HashSet<(long, long)> _pressedThisFrame = new();
     private readonly HashSet<Keys> _keys = new();
+    private readonly Dictionary<int, Keys[]> _mergedKeyBuffers = new();
     private Vector2 _cursor, _stick;
     private bool _cursorReady, _expanded = true, _touchAvailable = true, _config, _connected, _wasActive, _waitPad = true;
     private bool _previousConnected, _oldStart, _oldBack, _oldR3, _cameraMode;
@@ -549,8 +550,39 @@ internal sealed class MobileControls
     public MouseState HudMouse(MouseState mouse) => WorldActionOnly ? Pointer(mouse,false,false) : mouse;
     public KeyboardState Merge(KeyboardState keyboard)
     {
-        if (_keys.Count == 0) return keyboard;
-        var keys = new HashSet<Keys>(keyboard.GetPressedKeys()); keys.UnionWith(_keys); return new KeyboardState(keys.ToArray());
+        if (_keys.Count == 0)
+        {
+            return keyboard;
+        }
+
+        var physicalCount = keyboard.GetPressedKeyCount();
+        var count = physicalCount;
+        foreach (var key in _keys)
+        {
+            if (keyboard.IsKeyUp(key))
+            {
+                count++;
+            }
+        }
+
+        // KeyboardState copies keys into its own bit fields; the buffer is safe to reuse.
+        if (!_mergedKeyBuffers.TryGetValue(count, out var keys))
+        {
+            keys = new Keys[count];
+            _mergedKeyBuffers.Add(count, keys);
+        }
+
+        keyboard.GetPressedKeys(keys);
+        var next = physicalCount;
+        foreach (var key in _keys)
+        {
+            if (keyboard.IsKeyUp(key))
+            {
+                keys[next++] = key;
+            }
+        }
+
+        return new KeyboardState(keys);
     }
     public void Update(Viewport viewport, GameTime time, bool active, bool available, bool typing, bool gameplay = true, bool backAvailable = false, bool skillPanel = false)
     {

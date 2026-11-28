@@ -1,4 +1,5 @@
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Input;
 using PristonTale.Gameplay.UI;
 using System.Runtime.CompilerServices;
 
@@ -24,6 +25,7 @@ internal static class MobileHudLayoutTests
         yield return Case("mobile HUD: WorldTouchRoutesToHudOnlyWhenAppropriate (false, false, true)", static () => WorldTouchRoutesToHudOnlyWhenAppropriate(false, false, true)); // login/seleção: toque normal
         yield return Case("mobile HUD: WorldTouchRoutesToHudOnlyWhenAppropriate (false, true, true)", static () => WorldTouchRoutesToHudOnlyWhenAppropriate(false, true, true));
         yield return Case("mobile HUD: stable role names and allocation-free control lookups", StableControlLookups);
+        yield return Case("mobile HUD: keyboard merge preserves snapshots and reuses buffers", KeyboardMerge);
         yield return Case("mobile HUD: DeadZoneIsRadialAndBounded", static () => DeadZoneIsRadialAndBounded());
         yield return Case("mobile HUD: DesktopScaleRemainsInteger", static () => DesktopScaleRemainsInteger());
         yield return Case("mobile HUD: MobileWorldTapIgnoresGestures (10f,10f,14f,11f,false,true,true)", static () => MobileWorldTapIgnoresGestures(10f,10f,14f,11f,false,true,true));
@@ -45,6 +47,52 @@ internal static class MobileHudLayoutTests
         run();
         return Task.CompletedTask;
     });
+
+    private static void KeyboardMerge()
+    {
+        var controls = new MobileControls();
+        var physical = new KeyboardState(Keys.A, Keys.LeftShift);
+        Check.True(controls.Merge(physical) == physical);
+        controls.OnPress(MobileControls.Role.Potion1);
+        controls.OnPress(MobileControls.Role.Potion2);
+        controls.OnPress(MobileControls.Role.Potion1);
+
+        var empty = default(KeyboardState);
+        var overlapping = new KeyboardState(Keys.D1, Keys.A);
+        var previous = controls.Merge(physical);
+        Check.True(previous == new KeyboardState(Keys.A, Keys.LeftShift, Keys.D1, Keys.D2));
+        Check.True(controls.Merge(overlapping) == new KeyboardState(Keys.A, Keys.D1, Keys.D2));
+        Check.True(controls.Merge(empty) == new KeyboardState(Keys.D1, Keys.D2));
+        Check.True(previous.IsKeyDown(Keys.LeftShift));
+        Check.True(previous.IsKeyDown(Keys.A));
+        Check.True(physical.IsKeyUp(Keys.D1));
+
+        // Revisit different key counts and then the same count with different physical keys.
+        var alternate = new KeyboardState(Keys.B, Keys.RightShift);
+        var expected = new KeyboardState(Keys.B, Keys.RightShift, Keys.D1, Keys.D2);
+        var expectedEmpty = new KeyboardState(Keys.D1, Keys.D2);
+        var expectedOverlap = new KeyboardState(Keys.A, Keys.D1, Keys.D2);
+        var correct = true;
+        for (var i = 0; i < 1000; i++)
+        {
+            correct &= controls.Merge(alternate) == expected;
+            correct &= controls.Merge(empty) == expectedEmpty;
+            correct &= controls.Merge(overlapping) == expectedOverlap;
+        }
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+        {
+            correct &= controls.Merge(alternate) == expected;
+            correct &= controls.Merge(empty) == expectedEmpty;
+            correct &= controls.Merge(overlapping) == expectedOverlap;
+        }
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Check.True(correct);
+        Check.True(previous == new KeyboardState(Keys.A, Keys.LeftShift, Keys.D1, Keys.D2));
+        Assert.True(allocated == 0, $"warmed keyboard merges allocated {allocated} bytes");
+    }
 
     private static void StableControlLookups()
     {

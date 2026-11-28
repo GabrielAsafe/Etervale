@@ -27,6 +27,7 @@ public sealed class GameplayScreen : GameScreen
     private long _perfPortraitBytes;
     private long _perfSceneBytes;
     private long _perfHudBytes;
+    private (long Prepare, long Mobile, long Hud, long Bridge, long Scene, long Tail) _updateAllocLast;
     private long _lastGpuPerfLog;
     private bool _mobileFirstGameplayDraw;
 
@@ -58,6 +59,9 @@ public sealed class GameplayScreen : GameScreen
         }
 
         _lastGpuPerfLog = now;
+        var update = _updateAllocLast;
+        MobileDiagnosticTrace.WritePerformance($"Update allocation last bytes | prepare={update.Prepare} mobile={update.Mobile} hud={update.Hud}"
+            + $" bridge={update.Bridge} scene={update.Scene} tail={update.Tail}");
         if (!profiler.GpuTimersAvailable)
         {
             MobileDiagnosticTrace.WritePerformance("GPU timers=unavailable");
@@ -192,6 +196,8 @@ public sealed class GameplayScreen : GameScreen
 
     public override void Update(GameTime gameTime)
     {
+        var measure = OperatingSystem.IsAndroid();
+        var start = measure ? GC.GetAllocatedBytesForCurrentThread() : 0;
         var catalog = _pendingHudCatalog;
         if (catalog is not null)
         {
@@ -215,6 +221,7 @@ public sealed class GameplayScreen : GameScreen
         _hud.PlayerActing = _scene.PlayerActing;
         _hud.PlayerActionStarts = _scene.PlayerActionStarts;
         _hud.RestartOffer = _scene.RestartOffer;
+        var prepared = measure ? GC.GetAllocatedBytesForCurrentThread() : 0;
         if (Context.Presentation.AwaitingConfirmation) _hud.Mobile.Reset(preservePointer: true);
         else _hud.Mobile.Update(Context.GraphicsDevice.Viewport, gameTime,
             Context.IsWindowActive,
@@ -229,7 +236,9 @@ public sealed class GameplayScreen : GameScreen
         // ETERVALE_MOBILE_HUD_EDITOR_V33: botão FALAR partilha o caminho de aproximação NPC do rato.
         if (_hud.Mobile.MapRequested) _hud.ToggleMobileMap(); // ETERVALE_MOBILE_UI_V32
         if (_hud.Mobile.CloseRequested && !Context.Presentation.AwaitingConfirmation) HandleEscape();
+        var mobile = measure ? GC.GetAllocatedBytesForCurrentThread() : 0;
         _hud.Update(_scene.Owner);
+        var hud = measure ? GC.GetAllocatedBytesForCurrentThread() : 0;
         // ETERVALE_MOBILE_TARGET_LOOT_V28: toque no mundo não é um clique de rato.
         _scene.MobileTap = _hud.MobileOverlayAllowed && !_hud.Mobile.MenuCaptures ? _hud.Mobile.WorldTap : null;
         _scene.MobileSelectNext = _hud.MobileOverlayAllowed && !_hud.Mobile.MenuCaptures && _hud.Mobile.TargetNextRequested;
@@ -258,13 +267,20 @@ public sealed class GameplayScreen : GameScreen
             UpdateMotionKeys();
             UpdateDebugKeys();
         }
+        var bridge = measure ? GC.GetAllocatedBytesForCurrentThread() : 0;
         _scene.Update(gameTime);
+        var scene = measure ? GC.GetAllocatedBytesForCurrentThread() : 0;
         _hud.TargetId = _scene.SelectedTargetId;
         _hud.HelperPet = _scene.SelfHelperPet();
         _hud.HoveredId = _scene.HoveredTargetId;
         _hud.TracedId = _scene.TracedTargetId;
         _hud.ButtonsPlayerId = _scene.ReachedPlayerId;
         _lastKeyboard = Keyboard.GetState();
+        if (measure)
+        {
+            _updateAllocLast = (prepared - start, mobile - prepared, hud - mobile, bridge - hud, scene - bridge,
+                GC.GetAllocatedBytesForCurrentThread() - scene);
+        }
     }
 
     public override void Draw()
