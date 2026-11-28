@@ -1096,12 +1096,17 @@ public sealed partial class PristonRenderer : IDisposable
         BoundingBox Bounds,
         bool ShadowCoveredByAggregate = false);
 
-    private readonly record struct StaticMergeKey(
+    internal readonly record struct StaticMergeKey(
         Texture2D Texture,
         bool AlphaTest,
         bool TwoSided,
         bool SelfIllum,
-        BlendState Blend);
+        uint BlendType,
+        BlendState Blend,
+        float Transparency,
+        PristonStageOperation BaseOperation,
+        PristonMaterialLayer Layer,
+        PristonMaterialDescription Description);
 
     private readonly record struct AnimatedMergeKey(
         Texture2D Texture,

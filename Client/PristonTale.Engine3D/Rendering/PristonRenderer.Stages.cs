@@ -359,14 +359,15 @@ public sealed partial class PristonRenderer
 
             if (CanMerge(runtime))
             {
-                var key = new StaticMergeKey(runtime.Textures[0], runtime.AlphaTest, runtime.TwoSided, runtime.SelfIllum, runtime.BlendState);
+                var key = CreateStaticMergeKey(runtime);
                 if (!merged.TryGetValue(key, out var entry))
                 {
-                    entry = (runtime, []);
-                    merged.Add(key, entry);
+                    merged.Add(key, (runtime, vertices));
                 }
-
-                entry.Vertices.AddRange(vertices);
+                else
+                {
+                    entry.Vertices.AddRange(vertices);
+                }
             }
             else
             {
@@ -408,17 +409,21 @@ public sealed partial class PristonRenderer
         }
     }
 
-    private static bool CanMerge(PristonMaterialRuntime material)
+    internal static bool CanMerge(PristonMaterialRuntime material)
     {
-        return material.Description.PbrNormal is null && material.Description.PbrOrm is null
-            && material.TextureFormState == 0
+        return material.TextureFormState == 0
             && !material.Transparent
             && !material.Water
             && !material.Blinking
             && !material.Wind
-            && !material.HasLayers
+            && material.Layers.Length <= 1
+            && (material.Layer is null || material.Layer.FormState == 0)
             && material.Textures.Length == 1;
     }
+
+    internal static StaticMergeKey CreateStaticMergeKey(PristonMaterialRuntime material) => new(
+        material.Textures.Length == 1 ? material.Textures[0] : null, material.AlphaTest, material.TwoSided, material.SelfIllum,
+        material.BlendType, material.BlendState, material.Transparency, material.BaseOperation, material.Layer, material.Description);
 
     private static bool CanAggregateShadow(PristonMaterialRuntime material)
     {

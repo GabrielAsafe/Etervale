@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Content;
 using Microsoft.Xna.Framework.Graphics;
@@ -92,7 +93,9 @@ public sealed class PristonPhysicalSky : IDisposable
         _cloudShadow = new RenderTarget2D(device, CloudShadowSize, CloudShadowSize, false, SurfaceFormat.Color, DepthFormat.None, 0,
             RenderTargetUsage.PreserveContents);
         _noise = new Texture3D(device, PristonCloudNoise.Size, PristonCloudNoise.Size, PristonCloudNoise.Size, false, SurfaceFormat.HalfVector4);
-        _noise.SetData(PristonCloudNoise.Generate());
+        var started = Stopwatch.GetTimestamp();
+        _noise.SetData(PristonCloudNoise.GetDefault());
+        (log ?? ConsoleClientLog.Instance).Info($"[Sky] Cloud noise wait and upload: {Stopwatch.GetElapsedTime(started).TotalMilliseconds:F1} ms.");
     }
 
     // The clouds' transmittance toward the sun over CloudShadowExtent km around the camera, and how surfaces read it
@@ -179,7 +182,11 @@ public sealed class PristonPhysicalSky : IDisposable
 
         _cloudsValid = true;
 
-        Pass(_cloudShadow, "CloudShadow");
+        // No surface samples the cloud shadow when its strength is zero.
+        if (shadowStrength > 0f)
+        {
+            Pass(_cloudShadow, "CloudShadow");
+        }
         var extent = CloudShadowExtent * WorldUnitsPerKilometre;
         CloudShadowParams = new Vector4(1f / extent, camera.X, camera.Z, MathHelper.Clamp(shadowStrength, 0f, 1f));
     }

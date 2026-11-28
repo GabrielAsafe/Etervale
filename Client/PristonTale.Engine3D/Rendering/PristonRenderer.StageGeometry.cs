@@ -537,19 +537,15 @@ public sealed partial class PristonRenderer
             var mergeable = CanMerge(runtimeMaterial);
             if (mergeable)
             {
-                var key = new StaticMergeKey(
-                    runtimeMaterial.Textures[0],
-                    runtimeMaterial.AlphaTest,
-                    runtimeMaterial.TwoSided,
-                    runtimeMaterial.SelfIllum,
-                    runtimeMaterial.BlendState);
+                var key = CreateStaticMergeKey(runtimeMaterial);
                 if (!merged.TryGetValue(key, out var entry))
                 {
-                    entry = (runtimeMaterial, []);
-                    merged.Add(key, entry);
+                    merged.Add(key, (runtimeMaterial, vertices));
                 }
-
-                entry.Vertices.AddRange(vertices);
+                else
+                {
+                    entry.Vertices.AddRange(vertices);
+                }
             }
             else
             {

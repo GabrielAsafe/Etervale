@@ -12,9 +12,27 @@ internal static class RenderFidelityTests
         yield return ("mip chains weight colour by alpha so transparent key colours do not bleed", MipChainAlphaWeightedAsync);
         yield return ("cutout mip chains preserve the base alpha-test coverage", MipChainCoverageAsync);
         yield return ("data mip chains average the stored values and keep each packed normal pair a unit direction", MipChainDataAsync);
+        yield return ("apk65: cached cloud noise matches reference packed texels", CloudNoiseAsync);
         yield return ("vertex animation clock wraps on a common period without a phase jump", VertexClockAsync);
         yield return ("frame profiler accumulates CPU sections without GPU timers", ProfilerAsync);
         yield return ("original light levels map to illuminance by the calibrated power curve", LightLevelsAsync);
+    }
+
+    private static Task CloudNoiseAsync()
+    {
+        foreach (var size in new[] { 7, 16, 64 })
+        {
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
+            var expected = PristonTale.Engine3D.Rendering.Atmosphere.PristonCloudNoise.GenerateReference(size);
+            var referenceMs = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            started = System.Diagnostics.Stopwatch.GetTimestamp();
+            var actual = PristonTale.Engine3D.Rendering.Atmosphere.PristonCloudNoise.Generate(size);
+            var cachedMs = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            Console.WriteLine($"Cloud noise {size}: reference={referenceMs:F1} ms cached={cachedMs:F1} ms");
+            Assert.True(actual.AsSpan().SequenceEqual(expected), $"cached cloud noise differs at size {size}");
+        }
+
+        return Task.CompletedTask;
     }
 
     private static Task VertexClockAsync()

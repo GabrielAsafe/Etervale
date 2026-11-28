@@ -16,12 +16,29 @@ internal static class RenderTests
         yield return ("render optimizations: floor light bounds include separated faces", FloorLightBoundsAsync);
         yield return ("static mesh preparation computes topology and normals without a GPU", MeshAsync);
         yield return ("loading optimizations: mesh spans preserve topology and bounds without copying corners", MeshSpanAsync);
+        yield return ("apk65: static merge key keeps distinct material parameters", StaticMergeKeyAsync);
         yield return ("stage normals are smoothed across materials and faces sharing a position, not across a wall", StageNormalsAsync);
         yield return ("a stage face that is never drawn does not bend the drawn ground's normals", HiddenStageNormalsAsync);
         yield return ("CPU image decoding handles invalid data without GPU resources", DecodeAsync);
         yield return ("run-length TGAs decode repeated and stored packets, plain or with the masked header", RunLengthTgaAsync);
         yield return ("UI bitmaps of 32 bits keep their coverage and skip the black key; zeroed coverage stays opaque", BmpCoverageAsync);
         yield return ("PNG export cache separates opacity variants and basename collisions", ExportAsync);
+    }
+
+    private static Task StaticMergeKeyAsync()
+    {
+        static PristonMaterialRuntime Material(float transparency, PristonMaterialDescription description, PristonMaterialLayer? layer = null,
+            PristonStageOperation operation = PristonStageOperation.Modulate) => new([], false, false, false, 0, transparency,
+                0, 0, 0, 0, false, false, false, false, 0, 0, operation, layer is null ? [] : [layer], description);
+        var description = PristonMaterialDescription.Default;
+        var key = PristonRenderer.CreateStaticMergeKey(Material(0, description));
+        Assert.True(key == PristonRenderer.CreateStaticMergeKey(Material(0, description with { })), "equal descriptions did not merge");
+        Assert.True(key != PristonRenderer.CreateStaticMergeKey(Material(0.1f, description)), "different opacity merged");
+        Assert.True(key != PristonRenderer.CreateStaticMergeKey(Material(0, description with { Roughness = 0.1f })), "different roughness merged");
+        Assert.True(key != PristonRenderer.CreateStaticMergeKey(Material(0, description, new PristonMaterialLayer(null, PristonStageOperation.Add, 0))), "different layer merged");
+        Assert.True(key != PristonRenderer.CreateStaticMergeKey(Material(0, description, operation: PristonStageOperation.Add)), "different base operation merged");
+        Assert.True(!PristonRenderer.CanMerge(Material(0, description)), "a material without a texture became mergeable");
+        return Task.CompletedTask;
     }
 
     private static Task MaterialUsageAsync()

@@ -40,6 +40,12 @@ public sealed class PristonSkyLibrary : IDisposable
             library.Load(device, assetRoot);
             log.Info($"[Sky] {library.ProfileCount} profiles ready in {Stopwatch.GetElapsedTime(started).TotalMilliseconds:F1} ms; "
                 + $"meshes {library.MeshBytes} B; textures {library.TextureBytes} B.");
+            // Start only CPU work once the classic sky bootstrap has finished. The render thread uploads on demand.
+            if (OperatingSystem.IsAndroid())
+            {
+                Atmosphere.PristonCloudNoise.PrepareDefault();
+            }
+
             return library;
         }
         catch
@@ -55,6 +61,7 @@ public sealed class PristonSkyLibrary : IDisposable
         var reader = new PristonSmdReader();
         var builder = new PristonGpuMeshBuilder(device);
         var materials = new PristonMaterialRuntimeFactory(_textures);
+        var models = new Dictionary<string, PristonModel>(StringComparer.Ordinal);
         var cache = new Dictionary<(string Path, Color Color), PreparedLayer>();
         var caps = new Dictionary<PreparedLayer, RenderBatch[]>();
         var textures = new HashSet<Texture2D>();
@@ -78,7 +85,11 @@ public sealed class PristonSkyLibrary : IDisposable
                 var key = (path, layer.Color);
                 if (!cache.TryGetValue(key, out var prepared))
                 {
-                    var model = reader.ReadModel(path);
+                    if (!models.TryGetValue(path, out var model))
+                    {
+                        model = reader.ReadModel(path);
+                        models.Add(path, model);
+                    }
                     var groups = PristonModelGeometry.BuildGroups(model, Matrix.Identity, layer.Color);
                     var modelBatches = new List<RenderBatch>();
                     var opaque = new List<(PristonMaterialRuntime Material, List<PristonCornerVertex> Vertices)>();

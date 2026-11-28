@@ -229,6 +229,14 @@ The BRDF lookup pixels are generated once per process; each renderer owns a sepa
 optional physical sky, reflection, volumetric, screen occlusion, bloom, SMAA and temporal resources on first use rather
 than during bootstrap. This may move their initialization cost to the first frame that actually needs them.
 
+The default cloud-noise pixels are prepared once per process. On Android, CPU preparation starts after the classic sky
+bootstrap, with at most two parallel generation workers; the texture upload still runs on the render thread on first use.
+Worley feature-point offsets are computed once per lattice cell and the same distances and channel normalization are used.
+The cloud shadow pass is skipped when no surface samples its result. Static batches can share PBR maps or a non-scrolling
+layer only when their full material keys agree (including the description, blend, transparency and texture operation).
+The first merge entry reuses its existing corner list; subsequent compatible groups append their corners. Sky layers reuse
+parsed models for repeated paths without changing the authored per-layer tint.
+
 ## Render targets
 
 The Android classic field sky uses `SurfaceFormat.Color` (RGBA8 UNORM, not a hardware sRGB target).

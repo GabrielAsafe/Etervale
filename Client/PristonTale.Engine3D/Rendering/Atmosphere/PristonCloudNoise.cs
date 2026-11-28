@@ -1,3 +1,4 @@
+using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics.PackedVector;
 
 namespace PristonTale.Engine3D.Rendering.Atmosphere;
@@ -10,17 +11,38 @@ public static class PristonCloudNoise
 {
     public const int Size = 64;
 
-    public static HalfVector4[] Generate(int size = Size)
+    // The deterministic default volume is shared as CPU pixels, not as a graphics-device resource.
+    private static readonly Lazy<Task<HalfVector4[]>> DefaultVolume = new(() => Task.Run(() => Generate()));
+
+    internal static void PrepareDefault() => _ = DefaultVolume.Value;
+
+    internal static HalfVector4[] GetDefault() => DefaultVolume.Value.GetAwaiter().GetResult();
+
+    public static HalfVector4[] Generate(int size = Size) => GenerateCore(size, true);
+
+    internal static HalfVector4[] GenerateReference(int size) => GenerateCore(size, false);
+
+    private static HalfVector4[] GenerateCore(int size, bool cacheCells)
     {
+        Vector3[][] featurePoints = cacheCells ? new Vector3[5][] : null;
+        if (featurePoints is not null)
+        {
+            for (var octave = 0; octave < featurePoints.Length; octave++)
+            {
+                featurePoints[octave] = FeaturePoints(4 << octave);
+            }
+        }
+
         var values = new float[size * size * size * 4];
-        Parallel.For(0, size, z =>
+        var options = new ParallelOptions { MaxDegreeOfParallelism = OperatingSystem.IsAndroid() ? 2 : -1 };
+        Parallel.For(0, size, options, z =>
         {
             Span<float> rgba = stackalloc float[4];
             for (var y = 0; y < size; y++)
             {
                 for (var x = 0; x < size; x++)
                 {
-                    At((x + 0.5f) / size, (y + 0.5f) / size, (z + 0.5f) / size, rgba);
+                    At((x + 0.5f) / size, (y + 0.5f) / size, (z + 0.5f) / size, rgba, featurePoints);
                     rgba.CopyTo(values.AsSpan(((z * size + y) * size + x) * 4, 4));
                 }
             }
@@ -53,12 +75,14 @@ public static class PristonCloudNoise
     }
 
     // The four channels at a point of the unit cube (wrapping).
-    public static void At(float x, float y, float z, Span<float> rgba)
+    public static void At(float x, float y, float z, Span<float> rgba) => At(x, y, z, rgba, null);
+
+    private static void At(float x, float y, float z, Span<float> rgba, Vector3[][] featurePoints)
     {
         Span<float> worley = stackalloc float[5];
         for (var octave = 0; octave < worley.Length; octave++)
         {
-            worley[octave] = Worley(x, y, z, 4 << octave);
+            worley[octave] = Worley(x, y, z, 4 << octave, featurePoints?[octave]);
         }
 
         float perlin = 0f, amplitude = 1f, total = 0f;
@@ -130,7 +154,30 @@ public static class PristonCloudNoise
 
     // One minus the distance to the nearest of one random point per cell (cells per unit, wrapping): bright cell
     // cores and dark borders.
-    private static float Worley(float x, float y, float z, int cells)
+    private static Vector3[] FeaturePoints(int cells)
+    {
+        var points = new Vector3[cells * cells * cells];
+        for (var z = 0; z < cells; z++)
+        {
+            for (var y = 0; y < cells; y++)
+            {
+                for (var x = 0; x < cells; x++)
+                {
+                    points[(z * cells + y) * cells + x] = FeaturePoint(x, y, z);
+                }
+            }
+        }
+
+        return points;
+    }
+
+    private static Vector3 FeaturePoint(int x, int y, int z)
+    {
+        var h = Hash(x, y, z, 13u);
+        return new Vector3(Unit(h), Unit(Hash((int)h, 1, 2, 3u)), Unit(Hash((int)h, 4, 5, 6u)));
+    }
+
+    private static float Worley(float x, float y, float z, int cells, Vector3[] featurePoints)
     {
         x *= cells;
         y *= cells;
@@ -144,10 +191,14 @@ public static class PristonCloudNoise
                 for (var dx = -1; dx <= 1; dx++)
                 {
                     int cx = xi + dx, cy = yi + dy, cz = zi + dz;
-                    var h = Hash(Wrap(cx, cells), Wrap(cy, cells), Wrap(cz, cells), 13u);
-                    var px = cx + Unit(h) - x;
-                    var py = cy + Unit(Hash((int)h, 1, 2, 3u)) - y;
-                    var pz = cz + Unit(Hash((int)h, 4, 5, 6u)) - z;
+                    // Every octave has a power-of-two period. Preserve the original floating-point evaluation order.
+                    var wx = cx & (cells - 1);
+                    var wy = cy & (cells - 1);
+                    var wz = cz & (cells - 1);
+                    var point = featurePoints is null ? FeaturePoint(wx, wy, wz) : featurePoints[(wz * cells + wy) * cells + wx];
+                    var px = cx + point.X - x;
+                    var py = cy + point.Y - y;
+                    var pz = cz + point.Z - z;
                     nearest = MathF.Min(nearest, px * px + py * py + pz * pz);
                 }
             }
