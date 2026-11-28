@@ -8,6 +8,7 @@ internal static class ClientSettingsTests
 {
     public static IEnumerable<(string, Func<Task>)> Cases()
     {
+        yield return ("apk67: generated settings JSON matches the existing contract", GeneratedSettingsAsync);
         yield return ("settings validate limits without restricting valid monitor modes", ValidationAsync);
         yield return ("older settings inherit the current shadow refresh default", OlderDefaultsAsync);
         yield return ("older boolean distance fog settings load as fog modes", BooleanDistanceFogAsync);
@@ -24,6 +25,47 @@ internal static class ClientSettingsTests
         yield return ("a texture named with another extension is found in the subfolder its name points to", TextureExtensionAsync);
         yield return ("opening textures use only a configured Ricarten directory fallback after the source folder", TextureScopedFallbackAsync);
         yield return ("opening NPC E resolves only mm.bmp through the original TN-006 model directory", OpeningNpcTextureFallbackAsync);
+    }
+
+    private static async Task GeneratedSettingsAsync()
+    {
+        var settings = MobileGraphicsPolicy.Apply(new ClientSettings { ServerAddress = "example.invalid:10037", Language = "pt-BR", UiScale = 1.5f });
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+            UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow
+        };
+        foreach (var fixture in new[] { new ClientSettings(), settings, settings with { WindowX = 10, WindowY = -20, MobileRealisticSky = true } })
+        {
+            var expected = System.Text.Json.JsonSerializer.Serialize(fixture, options);
+            var generated = ClientSettingsStore.Serialize(fixture);
+            Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(System.Text.Json.Nodes.JsonNode.Parse(generated),
+                System.Text.Json.Nodes.JsonNode.Parse(expected)), "generated JSON changed the existing settings contract");
+        }
+
+        var path = Path.Combine(Path.GetTempPath(), "priston-generated-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            foreach (var (json, expected) in new[]
+            {
+                ("{}", new ClientSettings()),
+                ("{\"version\":1,\"shadowUpdateRate\":0,\"musicEnabled\":false,\"windowX\":null}",
+                    new ClientSettings { ShadowUpdateRate = 0, MusicEnabled = false, WindowX = null })
+            })
+            {
+                await File.WriteAllTextAsync(path, json);
+                var store = new ClientSettingsStore(path, NullClientLog.Instance);
+                var loaded = store.Load();
+                await store.CompleteAsync();
+                Assert.True(store.LastError.Length == 0 && loaded == expected.Validate(NullClientLog.Instance),
+                    "generated settings reader lost defaults or explicit values");
+            }
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     private static Task ValidationAsync()

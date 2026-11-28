@@ -1,7 +1,7 @@
 // ETERVALE_ANDROID_V5: writable Android config, seeded only if absent.
 using System;
 using System.IO;
-using System.Text.Json;
+using PristonTale.Engine3D.IO;
 using Android.App;
 using Android.Util;
 using PristonTale.Engine3D.Rendering;
@@ -37,8 +37,7 @@ internal static class EtervaleAndroidStartup
             UiScale = 1.5f
         });
 
-        File.WriteAllText(path, JsonSerializer.Serialize(settings,
-            new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+        File.WriteAllText(path, ClientSettingsStore.Serialize(settings));
         Log.Info("ETERVALE_3D", "Definicoes Android criadas: " + path + " mobile graphics=High");
         return path;
     }

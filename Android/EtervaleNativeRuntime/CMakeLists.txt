@@ -33,4 +33,10 @@ target_link_libraries(mgruntime PRIVATE
     "${ETERVALE_FAUDIO_STATIC}"
     "${ETERVALE_SDL_STATIC}"
     android log dl m z OpenSLES EGL GLESv1_CM GLESv2)
+# Keep ELF LOAD segments compatible with both 4 KB and 16 KB Android pages.
+if(ANDROID)
+    target_link_options(mgruntime PRIVATE
+        "-Wl,-z,max-page-size=16384"
+        "-Wl,-z,common-page-size=16384")
+endif()
 set_target_properties(mgruntime PROPERTIES OUTPUT_NAME mgruntime)

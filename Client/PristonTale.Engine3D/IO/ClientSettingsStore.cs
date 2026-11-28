@@ -8,12 +8,8 @@ namespace PristonTale.Engine3D.IO;
 
 public sealed class ClientSettingsStore
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
-    };
+    // Use the same generated contract for desktop persistence and Android's initial settings.
+    public static string Serialize(ClientSettings settings) => JsonSerializer.Serialize(settings, ClientSettingsJsonContext.Default.ClientSettings);
 
     private readonly string _path;
     private readonly IClientLog _log;
@@ -70,8 +66,7 @@ public sealed class ClientSettingsStore
                 return H700Native(defaults);
             }
 
-            var settings = JsonSerializer.Deserialize<ClientSettings>(File.ReadAllBytes(_path), JsonOptions)
-                ?? throw new JsonException("Settings document is null.");
+            var settings = Deserialize(File.ReadAllBytes(_path));
             if (settings.Version != ClientSettings.CurrentVersion)
             {
                 _readOnly = true;
@@ -88,6 +83,43 @@ public sealed class ClientSettingsStore
             ReportError($"Cannot load {_path}; using defaults without overwriting the file: {exception.Message}");
             return H700Native(new ClientSettings());
         }
+    }
+
+    // .NET 10 source-generated construction of init-only members loses absent property initializers.
+    // Supply only missing fields from the current defaults; keep explicit values and unknown fields for validation.
+    private static ClientSettings Deserialize(byte[] json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var input = document.RootElement;
+        if (input.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException("Settings document must be an object.");
+        }
+
+        var defaults = JsonSerializer.SerializeToElement(new ClientSettings(), ClientSettingsJsonContext.Default.ClientSettings);
+        using var merged = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(merged))
+        {
+            writer.WriteStartObject();
+            foreach (var property in defaults.EnumerateObject())
+            {
+                if (!input.TryGetProperty(property.Name, out _))
+                {
+                    property.WriteTo(writer);
+                }
+            }
+
+            foreach (var property in input.EnumerateObject())
+            {
+                property.WriteTo(writer);
+            }
+
+            writer.WriteEndObject();
+        }
+
+        merged.Position = 0;
+        return JsonSerializer.Deserialize(merged, ClientSettingsJsonContext.Default.ClientSettings)
+            ?? throw new JsonException("Settings document is null.");
     }
 
     public bool QueueSave(ClientSettings settings)
@@ -112,7 +144,7 @@ public sealed class ClientSettingsStore
                 Directory.CreateDirectory(directory);
                 await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, useAsync: true))
                 {
-                    await JsonSerializer.SerializeAsync(stream, settings, JsonOptions).ConfigureAwait(false);
+                    await JsonSerializer.SerializeAsync(stream, settings, ClientSettingsJsonContext.Default.ClientSettings).ConfigureAwait(false);
                     await stream.FlushAsync().ConfigureAwait(false);
                 }
 
@@ -142,4 +174,11 @@ public sealed class ClientSettingsStore
         Volatile.Write(ref _lastError, message);
         _log.Error($"[Settings] {message}");
     }
+}
+
+[JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow)]
+[JsonSerializable(typeof(ClientSettings))]
+internal sealed partial class ClientSettingsJsonContext : JsonSerializerContext
+{
 }

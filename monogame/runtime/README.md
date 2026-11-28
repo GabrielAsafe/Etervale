@@ -26,6 +26,10 @@ Everything the build needs is in the repository except SDL2 and FAudio, which ar
 | `../upstream/*.md` | One note per change: the problem and the fix, as material for an issue the owner files himself. `05-effect-array-elements.md` is about MonoGame's C# (worked around in application code, not part of the patch). MonoGame accepts no contributions written with generative AI (its CONTRIBUTING.md), so these changes are not sent as pull requests. |
 | `../LICENSE-MonoGame.txt`, `CREDITS.md` | MonoGame's licence (MS-PL) and the credits of the vendored and fetched code. |
 
+The Android ARM64 runtime is linked by `Android/EtervaleNativeRuntime/CMakeLists.txt` with 16 KB maximum
+and common ELF page alignment. This meets the ELF alignment requirement for 4 KB and 16 KB Android systems; verify
+all packaged ELF segments and ZIP alignment and test on both page sizes.
+
 ## The changes (`monogame-v3.8.6.patch`)
 
 1. **`independentBlend`.** The runtime creates the Vulkan device without this feature, which a per-target blend state

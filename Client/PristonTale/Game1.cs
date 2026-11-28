@@ -1,3 +1,4 @@
+#nullable enable
 using System;
 using System.IO;
 using System.Threading.Tasks;
@@ -19,7 +20,8 @@ namespace PristonTale;
 public class Game1 : Game
 {
     private readonly GraphicsDeviceManager _graphics;
-    private GameClient _client;
+    private GameClient? _client;
+    private GameClient Client => _client ?? throw new InvalidOperationException("Game content is not loaded.");
 
     private KeyboardState _lastKeyboardState;
     private readonly FrameTiming _timing = new();
@@ -27,10 +29,11 @@ public class Game1 : Game
     private bool _mobileFirstEndDraw;
     private readonly PresentationSettings _presentation = new();
     private readonly ClientSettingsStore _settingsStore;
-    private PresentationController _presentationController;
-    private Task _shutdown;
+    private PresentationController? _presentationController;
+    private PresentationController Presentation => _presentationController ?? throw new InvalidOperationException("Presentation is not initialized.");
+    private Task? _shutdown;
 
-    public Game1(string settingsPath = null)
+    public Game1(string? settingsPath = null)
     {
         Mouse.EtervaleAndroid = OperatingSystem.IsAndroid();
         Microsoft.Xna.Framework.Graphics.GraphicsDevice.EtervaleAndroidDeferredFinalizers = OperatingSystem.IsAndroid();
@@ -68,17 +71,17 @@ public class Game1 : Game
         _presentationController = new PresentationController(_presentation, _settingsStore, _graphics, Window);
         MobileDiagnosticTrace.Mark("presentation_configured");
         _client = new GameClient(GraphicsDevice, Content, ResolveAssetRoot(), ResolveServerAddress(_presentation.Requested.ServerAddress), _presentation);
-        _client.LoadContent();
+        Client.LoadContent();
 #if DEBUG
         if (PristonTale.Gameplay.Screens.Framework.AndroidRegressionSession.Active)
         {
-            _client.DiagnosticsShown = true;
+            Client.DiagnosticsShown = true;
         }
 #endif
         MobileDiagnosticTrace.Mark("game_load_content_finished");
         // SDL/desktop cursor scaling can blur the original 32x32 TGA; the client draws it with PointClamp.
-        IsMouseVisible = !_client.HasGameCursor;
-        Window.TextInput += (_, args) => _client.TypeCharacter(args.Character);
+        IsMouseVisible = !Client.HasGameCursor;
+        Window.TextInput += (_, args) => Client.TypeCharacter(args.Character);
         ConsoleClientLog.Instance.Info($"[Presentation] GPU={GraphicsDevice.Adapter.DeviceName}; variable timestep; VSync={_presentation.VerticalSync}; maxFps={_presentation.Requested.MaxFps} (0=unlimited).");
     }
 
@@ -127,17 +130,17 @@ public class Game1 : Game
             _presentation.ConfirmRequested |= keyboard.IsKeyDown(Keys.Enter) && !_lastKeyboardState.IsKeyDown(Keys.Enter);
             escapePressed = false;
         }
-        if ((!OperatingSystem.IsAndroid() && GamePad.GetState(PlayerIndex.One).Buttons.Back == ButtonState.Pressed) || escapePressed && !_client.HandleEscape() || _client.ExitRequested)
+        if ((!OperatingSystem.IsAndroid() && GamePad.GetState(PlayerIndex.One).Buttons.Back == ButtonState.Pressed) || escapePressed && !Client.HandleEscape() || Client.ExitRequested)
         {
             Exit();
         }
 
         if (keyboard.IsKeyDown(Keys.F9) && !_lastKeyboardState.IsKeyDown(Keys.F9))
         {
-            _client.ToggleDiagnostics();
+            Client.ToggleDiagnostics();
         }
 
-        _client.Update(gameTime, IsActive);
+        Client.Update(gameTime, IsActive);
         UpdateDiagnostics();
         _lastKeyboardState = keyboard;
         base.Update(gameTime);
@@ -148,24 +151,24 @@ public class Game1 : Game
     // title stays the game's name. Sampled only while shown.
     private void UpdateDiagnostics()
     {
-        if (!_client.DiagnosticsShown || !_timing.TrySample(Stopwatch.GetTimestamp(), out var sample, OperatingSystem.IsAndroid() ? 30 : int.MaxValue))
+        if (!Client.DiagnosticsShown || !_timing.TrySample(Stopwatch.GetTimestamp(), out var sample, OperatingSystem.IsAndroid() ? 30 : int.MaxValue))
         {
             return;
         }
 
         var limit = _presentation.Requested.FrameLimit(IsActive);
         var ceiling = limit == 0 ? "unlimited" : limit.ToString();
-        _client.Diagnostics = $"FPS {sample.FramesPerSecond:F0} (cap {ceiling}, VSync {(_presentation.VerticalSync ? "on" : "off")})"
+        Client.Diagnostics = $"FPS {sample.FramesPerSecond:F0} (cap {ceiling}, VSync {(_presentation.VerticalSync ? "on" : "off")})"
             + $"\nframe p95/p99 {sample.FrameP95Ms:F1}/{sample.FrameP99Ms:F1} ms, work {sample.WorkP95Ms:F1} ms, present {sample.PresentP95Ms:F1} ms,"
             + $" pacing {sample.PacingP95Ms:F1} ms, {sample.AllocatedBytesPerFrame / 1024:F1} KB/frame"
-            + $"\n{GraphicsDevice.Viewport.Width}x{GraphicsDevice.Viewport.Height} | {_client.StatusText.Replace(" | ", "\n")}";
+            + $"\n{GraphicsDevice.Viewport.Width}x{GraphicsDevice.Viewport.Height} | {Client.StatusText.Replace(" | ", "\n")}";
         // Keep the existing overlay and make captures reproducible through adb logcat.
         // This runs only while diagnostics are visible and never writes a file per frame.
         if (OperatingSystem.IsAndroid() && Stopwatch.GetElapsedTime(_lastMobilePerfLog).TotalSeconds >= 3)
         {
             _lastMobilePerfLog = Stopwatch.GetTimestamp();
             var settings = _presentation.Rendering;
-            MobileDiagnosticTrace.WritePerformance(_client.Diagnostics.Replace("\n", " | ")
+            MobileDiagnosticTrace.WritePerformance(Client.Diagnostics.Replace("\n", " | ")
                 + $" | quality={settings.Quality} AA={settings.AntiAliasing} MSAA={settings.MultiSampleCount}"
                 + $" | realisticSky={settings.RealisticSky} IBL={settings.ImageBasedLighting}"
                 + $" | AO={settings.AmbientOcclusion} contact={settings.ContactShadows} exposure={settings.AutoExposure}"
@@ -183,21 +186,21 @@ public class Game1 : Game
     {
         var started = Stopwatch.GetTimestamp();
         var allocated = GC.GetAllocatedBytesForCurrentThread();
-        _client.Draw();
+        Client.Draw();
         base.Draw(gameTime);
         _timing.RecordDraw(started, Stopwatch.GetTimestamp(), GC.GetAllocatedBytesForCurrentThread() - allocated);
     }
 
     protected override void OnExiting(object sender, ExitingEventArgs args)
     {
-        if (_client is not null)
+        if (_client is { } client && _presentationController is { } presentation)
         {
             if (_shutdown is null)
             {
-                _presentationController.CaptureWindowPlacement();
+                presentation.CaptureWindowPlacement();
             }
 
-            _shutdown ??= Task.WhenAll(_client.BeginShutdown(), _presentationController.CompleteAsync());
+            _shutdown ??= Task.WhenAll(client.BeginShutdown(), presentation.CompleteAsync());
             args.Cancel = !_shutdown.IsCompleted;
         }
 
@@ -217,14 +220,14 @@ public class Game1 : Game
         }
         if (_shutdown is null)
         {
-            _presentationController.CaptureWindowSize(GraphicsDevice.Viewport.Width, GraphicsDevice.Viewport.Height);
+            Presentation.CaptureWindowSize(GraphicsDevice.Viewport.Width, GraphicsDevice.Viewport.Height);
 #if DEBUG
             PristonTale.Display.AndroidRegressionScenario.Tick(_presentation);
 #endif
-            _presentationController.UpdateBoundary();
+            Presentation.UpdateBoundary();
         }
 
-        _timing.RecordPacing(_presentationController.Pace(IsActive));
+        _timing.RecordPacing(Presentation.Pace(IsActive));
     }
 
     protected override void UnloadContent()

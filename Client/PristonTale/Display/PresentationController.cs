@@ -1,3 +1,5 @@
+#nullable enable
+using System.Diagnostics.CodeAnalysis;
 using System;
 using System.Diagnostics;
 using System.Threading;
@@ -22,7 +24,8 @@ internal sealed class PresentationController
     private readonly GraphicsDeviceManager _graphics;
     private readonly GameWindow _window;
     private readonly FramePacer _pacer = new();
-    private ClientSettings _applied;
+    private ClientSettings? _applied;
+    private ClientSettings Applied => _applied ?? throw new InvalidOperationException("Display settings are not applied.");
     private ClientSettings _accepted;
     private long _confirmationDeadline;
     // The last position of the window while windowed and not maximized: the one it is restored to.
@@ -54,7 +57,7 @@ internal sealed class PresentationController
                 requested = MobileGraphicsPolicy.Apply(requested);
             }
             _shared.Requested = requested;
-            var preview = !requested.HasSameDisplay(_applied);
+            var preview = !requested.HasSameDisplay(Applied);
             Apply(requested);
             if (preview && _applied == requested)
             {
@@ -147,7 +150,7 @@ internal sealed class PresentationController
     public long Pace(bool active)
     {
         var started = Stopwatch.GetTimestamp();
-        var deadline = _pacer.Schedule(started, Stopwatch.Frequency, _applied.FrameLimit(active));
+        var deadline = _pacer.Schedule(started, Stopwatch.Frequency, Applied.FrameLimit(active));
         var now = started;
         while (now < deadline)
         {
@@ -161,6 +164,7 @@ internal sealed class PresentationController
 
     public Task CompleteAsync() => _store.CompleteAsync();
 
+    [MemberNotNull(nameof(_applied))]
     private void Apply(ClientSettings settings)
     {
         _shared.Requested = settings;
@@ -212,8 +216,8 @@ internal sealed class PresentationController
 
     private void Accept()
     {
-        _accepted = _applied;
-        _shared.Requested = _applied;
+        _accepted = Applied;
+        _shared.Requested = _accepted;
         _shared.AwaitingConfirmation = false;
         if (!RegressionOverrideActive)
         {

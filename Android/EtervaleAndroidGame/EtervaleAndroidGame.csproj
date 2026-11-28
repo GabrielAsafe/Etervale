@@ -19,7 +19,7 @@
   <ItemGroup>
     <ProjectReference Include="../../Client/PristonTale.Gameplay/PristonTale.Gameplay.csproj" />
     <Compile Include="../../Client/PristonTale/Game1.cs" Link="Game/Game1.cs" />
-    <Compile Include="../../Client/PristonTale/Display/*.cs" Link="Game/Display/%(Filename)%(Extension)" />
+    <Compile Include="../../Client/PristonTale/Display/*.cs" Exclude="../../Client/PristonTale/Display/DisplayValidationProbe.cs" Link="Game/Display/%(Filename)%(Extension)" />
   </ItemGroup>
   <!-- ETERVALE_ANDROID_NATIVE_RUNTIME -->
   <ItemGroup>

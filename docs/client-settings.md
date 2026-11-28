@@ -5,6 +5,10 @@ the in-game Settings panel, and how a change reaches the display, the renderer a
 `Client/PristonTale.Engine3D/Rendering/ClientSettings.cs` and `IO/ClientSettingsStore.cs`, applied by
 `Client/PristonTale/Display/`.
 
+The settings store and Android bootstrap share a source-generated JSON contract, retaining camel-case names,
+per-field enum converters and strict unknown-field handling on reads. Missing fields are filled from the current
+settings defaults before deserialization; explicit values remain subject to normal validation.
+
 ## Read this when
 
 - Adding, renaming or removing a client option.
