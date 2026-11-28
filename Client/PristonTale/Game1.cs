@@ -36,6 +36,10 @@ public class Game1 : Game
         Microsoft.Xna.Framework.Graphics.GraphicsDevice.EtervaleAndroidDeferredFinalizers = OperatingSystem.IsAndroid();
         _settingsStore = new ClientSettingsStore(settingsPath ?? ClientSettingsStore.DefaultPath, ConsoleClientLog.Instance);
         _presentation.Requested = _settingsStore.Load();
+        if (OperatingSystem.IsAndroid())
+        {
+            _presentation.Requested = MobileGraphicsPolicy.Apply(_presentation.Requested);
+        }
         MobileDiagnosticTrace.Mark("game_settings_loaded");
         _graphics = new GraphicsDeviceManager(this)
         {

@@ -16,6 +16,7 @@ internal static class ClientSettingsTests
         yield return ("settings write failures are observable without faulting gameplay", WriteFailureAsync);
         yield return ("frame pacing has no catch-up bursts and separates foreground limits", PacingAsync);
         yield return ("scaled scene preserves native output and unscaled subviewports", SceneScaleAsync);
+        yield return ("mobile graphics defaults and explicit choices preserve unrelated settings", MobileGraphicsAsync);
         yield return ("optional Android depth prepass preserves required rendering paths", OptionalDepthPrepassAsync);
         yield return ("GPU diagnostics distinguish absent samples from zero elapsed time", GpuProbeAsync);
         yield return ("a texture named with another extension is found in the subfolder its name points to", TextureExtensionAsync);
@@ -227,7 +228,13 @@ internal static class ClientSettingsTests
                 Assert.True(store.QueueSave(latest), "live persistence queue rejected settings");
             }
 
-            latest = latest with { MusicEnabled = false, SoundEnabled = false };
+            latest = latest with
+            {
+                MusicEnabled = false,
+                SoundEnabled = false,
+                MobileResolution = MobileResolution.Medium,
+                MobileRealisticSky = true
+            };
             Assert.True(store.QueueSave(latest), "audio preferences were rejected by the persistence queue");
 
             await store.CompleteAsync();
@@ -309,6 +316,62 @@ internal static class ClientSettingsTests
         return Task.CompletedTask;
     }
 
+    private static Task MobileGraphicsAsync()
+    {
+        var original = new ClientSettings
+        {
+            ServerAddress = "example.invalid",
+            Language = ClientSettings.BrazilianPortugueseLanguage,
+            MusicEnabled = false,
+            SoundEnabled = false,
+            CameraSceneryCollision = false
+        }.WithQuality(GraphicsQuality.Ultra);
+        var mobile = MobileGraphicsPolicy.Apply(original);
+        Assert.True(mobile.MobileResolution == MobileResolution.High && !mobile.MobileRealisticSky
+            && !mobile.RealisticSky && !mobile.ShadowsEnabled, "mobile defaults were not native and light");
+        Assert.True(mobile.AntiAliasing == AntiAliasingMode.Off && mobile.MultiSampleCount == 0
+            && !mobile.DepthPrepass && !mobile.AmbientOcclusion && !mobile.ContactShadows && !mobile.ImageBasedLighting
+            && !mobile.ScreenSpaceReflections && !mobile.VolumetricLight && mobile.Bloom == BloomQuality.Off
+            && !mobile.AutoExposure && !mobile.ColorGrading && mobile.MaxFps == 60 && !mobile.VerticalSync,
+            "desktop effects leaked into the mobile profile");
+        Assert.True(mobile.ServerAddress == original.ServerAddress && mobile.Language == original.Language
+            && mobile.MusicEnabled == original.MusicEnabled && mobile.SoundEnabled == original.SoundEnabled
+            && mobile.CameraSceneryCollision == original.CameraSceneryCollision
+            && mobile.WindowWidth == original.WindowWidth && mobile.WindowHeight == original.WindowHeight,
+            "mobile graphics changed unrelated settings");
+        var medium = MobileGraphicsPolicy.Apply(mobile with { MobileResolution = MobileResolution.Medium, MobileRealisticSky = true });
+        Assert.True(medium.RealisticSky && medium.ShadowsEnabled && medium.MobileRealisticSky, "sky and shadows did not change together");
+        Assert.True(MobileGraphicsPolicy.Apply(medium) == medium, "mobile policy was not idempotent");
+        Assert.True(mobile.HasSameDisplay(medium) && !mobile.HasSameRendering(medium), "mobile rendering changed the display or missed the rendering update");
+        var low = MobileGraphicsPolicy.Apply(medium with { MobileResolution = MobileResolution.Low });
+        Assert.True(!medium.HasSameRendering(low) && medium.HasSameDisplay(low), "scene scale alone did not reach the renderer");
+        Assert.True(MobileGraphicsPolicy.ScalePercent(MobileResolution.High) == 100
+            && MobileGraphicsPolicy.ScalePercent(MobileResolution.Medium) == 75
+            && MobileGraphicsPolicy.ScalePercent(MobileResolution.Low) == 50, "mobile resolution mapping changed");
+        foreach (var resolution in Enum.GetValues<MobileResolution>())
+        {
+            foreach (var sky in new[] { false, true })
+            {
+                var choice = MobileGraphicsPolicy.Apply(mobile with { MobileResolution = resolution, MobileRealisticSky = sky });
+                Assert.True(choice.MobileResolution == resolution && choice.RealisticSky == sky && choice.ShadowsEnabled == sky,
+                    $"mobile combination {resolution}/{sky} did not apply");
+                Assert.True(choice.HasSameDisplay(mobile) && choice.MaxFps == 60, "mobile choice changed display or cap");
+                var presentation = new PresentationSettings();
+                presentation.ApplyRendering(mobile);
+                presentation.ApplyRendering(choice);
+                Assert.True(presentation.Rendering.MobileResolution == resolution && presentation.Rendering.ShadowsEnabled == sky,
+                    "mobile choice did not reach effective rendering");
+            }
+            Assert.True(MobileGraphicsPolicy.NextResolution(MobileGraphicsPolicy.NextResolution(resolution, false), true) == resolution,
+                "mobile resolution cycle did not reverse");
+        }
+        Assert.True(MobileGraphicsPolicy.NextResolution(MobileResolution.Low, false) == MobileResolution.High, "mobile resolution did not wrap");
+        var invalid = mobile with { MobileResolution = (MobileResolution)999 };
+        Assert.True(invalid.Validate(NullClientLog.Instance).MobileResolution == MobileResolution.High
+            && MobileGraphicsPolicy.Apply(invalid).MobileResolution == MobileResolution.High, "invalid mobile resolution did not fall back");
+        return Task.CompletedTask;
+    }
+
     private static Task SceneScaleAsync()
     {
         var landscape = new Microsoft.Xna.Framework.Graphics.Viewport(0, 0, 2400, 1080);
@@ -320,6 +383,10 @@ internal static class ClientSettingsTests
         Assert.True(b.Width == 540 && b.Height == 1200 && b.Viewport.Width == 540 && b.Viewport.Height == 1200,
             "portrait scene did not scale to half resolution");
         Assert.True(landscape.Width == 2400 && landscape.Height == 1080, "caller viewport was modified");
+        var medium = PristonSceneTargets.ScaleScene(landscape, 2400, 1080, MobileGraphicsPolicy.ScalePercent(MobileResolution.Medium));
+        var mediumPortrait = PristonSceneTargets.ScaleScene(portrait, 1080, 2400, MobileGraphicsPolicy.ScalePercent(MobileResolution.Medium));
+        Assert.True(medium.Width == 1800 && medium.Height == 810 && mediumPortrait.Width == 810 && mediumPortrait.Height == 1800,
+            "75 percent scene dimensions were wrong");
         var native = PristonSceneTargets.ScaleScene(landscape, 2400, 1080, 100);
         Assert.True(native.Width == 2400 && native.Height == 1080, "native resolution changed");
         var sub = new Microsoft.Xna.Framework.Graphics.Viewport(10, 20, 800, 600);

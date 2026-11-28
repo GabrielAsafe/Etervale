@@ -24,14 +24,26 @@ internal sealed class HudSettingsPanel
     private static readonly int[] ShadowUpdateRates = [30, 60, 120, 0];
     private readonly PresentationSettings _settings;
     private const int RowsPerPage = 11;
-    private const int PageCount = 3; // Display/audio, graphics/camera, shortcut reference.
+    private const int DesktopPageCount = 3;
+    private const int MobilePageCount = 2;
+    private readonly bool _mobile;
+    private int PageCount => _mobile ? MobilePageCount : DesktopPageCount;
+    private const int MobileRowHeight = 34;
+    private readonly string[] _mobileLabels = new string[6];
     private readonly string[] _labels = new string[21];
     private int _page;
     private static Rectangle PreviousPage => new(BoxX + 22, BoxY + 294, 105, 25);
     private static Rectangle NextPage => new(BoxX + 208, BoxY + 294, 105, 25);
     private ClientSettings _labelSettings;
+    private string _labelLanguage = string.Empty;
 
-    public HudSettingsPanel(PresentationSettings settings) => _settings = settings;
+    public HudSettingsPanel(PresentationSettings settings)
+    {
+        _settings = settings;
+        _mobile = OperatingSystem.IsAndroid();
+    }
+
+    private static Rectangle MobileRow(int row) => new(BoxX + 24, BoxY + 64 + row * MobileRowHeight, SizeW * 32 + 64 - 48, MobileRowHeight - 1);
 
     public static Rectangle Box => HudPainter.HelpBoxBounds(BoxX, BoxY, SizeW, SizeH);
     public static Rectangle Title => HudPainter.HelpBoxTitle(BoxX, BoxY, SizeW);
@@ -55,6 +67,12 @@ internal sealed class HudSettingsPanel
         if (NextPage.Contains(pointer))
         {
             _page = (_page + 1) % PageCount;
+            return;
+        }
+
+        if (_mobile)
+        {
+            ClickMobile(pointer, backwards);
             return;
         }
 
@@ -102,24 +120,52 @@ internal sealed class HudSettingsPanel
         }
     }
 
+    private void ClickMobile(Point pointer, bool backwards)
+    {
+        var current = _settings.Requested;
+        for (var row = 0; row < (_page == 0 ? 2 : _mobileLabels.Length); row++)
+        {
+            if (!MobileRow(row).Contains(pointer))
+            {
+                continue;
+            }
+
+            _settings.Requested = _page == 0
+                ? row == 0
+                    ? MobileGraphicsPolicy.Apply(current with { MobileResolution = MobileGraphicsPolicy.NextResolution(current.MobileResolution, backwards) })
+                    : MobileGraphicsPolicy.Apply(current with { MobileRealisticSky = !current.MobileRealisticSky })
+                : row switch
+                {
+                    0 => current with { MusicEnabled = !current.MusicEnabled },
+                    1 => current with { SoundEnabled = !current.SoundEnabled },
+                    2 => current with { ClassicTargetHealthBar = !current.ClassicTargetHealthBar },
+                    3 => current with { ClassicNamePlates = !current.ClassicNamePlates },
+                    4 => current with { Language = NextLanguage(current.Language, backwards ? -1 : 1) },
+                    5 => current with { CameraSceneryCollision = !current.CameraSceneryCollision },
+                    _ => current
+                };
+            return;
+        }
+    }
+
     public void Draw(HudPainter painter, Point pointer)
     {
         RefreshLabels();
         painter.HelpBox(BoxX, BoxY, SizeW, SizeH);
         var title = Title;
         painter.Sprite(HudArt.HelpTitle, title.X, title.Y);
-        var titleKey = _page switch
+        var titleKey = _mobile ? (_page == 0 ? "Settings.MobileGraphics" : "Settings.Title") : _page switch
         {
             0 => "Settings.Title",
             1 => "Settings.PageGraphics",
             _ => "Settings.PageKeys"
         };
         painter.TextCentered(ClientText.Get(titleKey), title.Left, title.Right, title.Y + 7, HudTextColors.BoxTitle);
-        for (var localRow = 0; localRow < RowsPerPage; localRow++)
+        for (var localRow = 0; localRow < (_mobile ? (_page == 0 ? 2 : _mobileLabels.Length) : RowsPerPage); localRow++)
         {
-            var row = Row(localRow);
+            var row = _mobile ? MobileRow(localRow) : Row(localRow);
             var index = _page * RowsPerPage + localRow;
-            string text = _page switch
+            string text = _mobile ? (_page == 0 ? _labels[localRow] : _mobileLabels[localRow]) : _page switch
             {
                 0 or 1 when index < _labels.Length => _labels[index],
                 2 => ClientText.Get("Settings.Keys" + (localRow + 1)),
@@ -135,7 +181,7 @@ internal sealed class HudSettingsPanel
                 painter.Fill(row, Color.FromNonPremultiplied(255, 200, 0, 64));
             }
 
-            painter.Text(painter.Fit(text, row.Width - 8), row.X + 6, row.Y + 1);
+            painter.Text(painter.Fit(text, row.Width - 8), row.X + 6, row.Y + (_mobile ? 9 : 1));
         }
 
         painter.Text(ClientText.Get("Settings.PrevPage") + $" ({_page + 1}/{PageCount})", PreviousPage.X, PreviousPage.Y + 3,
@@ -145,7 +191,7 @@ internal sealed class HudSettingsPanel
         var notes = Row(18);
         painter.Text(painter.Fit(_settings.EffectiveDisplay, notes.Width - 8), notes.X + 6, notes.Y + 6, HudTextColors.Hint);
         var hint = ClientText.Get(_settings.Message.Length > 0 ? "Settings.NeedsAttention" :
-            _page == 2 ? "Settings.ReferenceOnly" : "Settings.Hint");
+            _mobile ? "Settings.MobileHint" : _page == 2 ? "Settings.ReferenceOnly" : "Settings.Hint");
         painter.Text(hint, notes.X + 6, notes.Y + 6 + RowHeight, _settings.Message.Length > 0 ? Color.Orange : HudTextColors.Hint);
         var ok = OkButton;
         painter.Sprite(HudArt.HelpButton, ok.X - 9, ok.Y - 4);
@@ -239,12 +285,27 @@ internal sealed class HudSettingsPanel
     private void RefreshLabels()
     {
         var settings = _settings.Requested;
-        if (_labelSettings == settings)
+        if (_labelSettings == settings && _labelLanguage == ClientText.Language)
         {
             return;
         }
 
         _labelSettings = settings;
+        _labelLanguage = ClientText.Language;
+        if (_mobile)
+        {
+            _labels[0] = ClientText.Format("Settings.MobileResolution", ClientText.Get("Settings.MobileResolution." + settings.MobileResolution),
+                MobileGraphicsPolicy.ScalePercent(settings.MobileResolution));
+            _labels[1] = ClientText.Get(settings.MobileRealisticSky ? "Settings.MobileSkyOn" : "Settings.MobileSkyOff");
+            _mobileLabels[0] = ClientText.Get(settings.MusicEnabled ? "Settings.MusicOn" : "Settings.MusicOff");
+            _mobileLabels[1] = ClientText.Get(settings.SoundEnabled ? "Settings.SoundOn" : "Settings.SoundOff");
+            _mobileLabels[2] = ClientText.Get(settings.ClassicTargetHealthBar ? "Settings.TargetHealthClassic" : "Settings.TargetHealthAlways");
+            _mobileLabels[3] = ClientText.Get(settings.ClassicNamePlates ? "Settings.NamePlatesClassic" : "Settings.NamePlatesCompact");
+            _mobileLabels[4] = ClientText.Format("Settings.Language", ClientText.Get("Language." + settings.Language));
+            _mobileLabels[5] = ClientText.Get(settings.CameraSceneryCollision ? "Settings.CameraCollisionOn" : "Settings.CameraCollisionOff");
+            return;
+        }
+
         _labels[0] = ClientText.Format("Settings.Window", ClientText.Get("Settings.WindowMode." + settings.WindowMode));
         _labels[1] = settings.Monitor < 0 ? ClientText.Get("Settings.MonitorCurrent") : ClientText.Format("Settings.Monitor", settings.Monitor);
         _labels[2] = settings.WindowMode == WindowMode.Borderless

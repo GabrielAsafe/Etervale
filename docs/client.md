@@ -1044,14 +1044,18 @@ budget; never read files in `Update`/`Draw` after `BeginRemotePresence`. Resolve
 
 ## Gameplay usability (Fedora phase 1)
 
-- Settings has three pages: display/audio; graphics and camera; and a read-only reference of mouse/keyboard shortcuts.
-  The existing language switch remains available. The optional scenery-collision toggle affects only the camera.
+- Desktop Settings has three pages: display/audio; graphics and camera; and a read-only mouse/keyboard reference.
+  Android has a graphics page (scene resolution and realistic sky/shadows) and a preferences page (audio, language,
+  target/nameplates and camera). The optional scenery-collision toggle affects only the camera.
 - The level guide's transient notice sits below the top-left quest information.
 - Actor selection uses torso pick volumes; ground-item labels take precedence over overlapping 3D item bounds.
   Ground navigation ignores floors not reachable from the current surface.
 - The optional streaming trace reports portal/seam distances when unloading a neighbouring field. It changes no
   loading distances, movement physics or authoritative warp behaviour.
 
-Debug Android regression requests optionally contain a fourth line selecting rotation, graphics, pacing or performance. The presentation boundary runs fixed-duration cases with normal settings application and confirmation. The host validates observed metrics and restores the original settings after each run. No credentials are stored in the APK.
+Debug Android regression requests optionally contain a fourth line selecting rotation, graphics, pacing, performance
+or mobile_graphics (the six combinations of three scene scales and two sky/shadow states). The presentation boundary
+runs fixed-duration cases with normal settings application and confirmation, without saving scenario overrides. The
+baseline is restored after the last case. No credentials are stored in the APK.
 
 Android starts directly at the 2D login screen, without loading the opening cinematic. Desktop retains the cinematic. The Android startup milestone remains login_first_draw.

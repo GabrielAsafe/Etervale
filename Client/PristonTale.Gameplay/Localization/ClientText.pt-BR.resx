@@ -967,4 +967,12 @@ seguem para a torre alta.</value></data>
   <data name="Settings.Keys9" xml:space="preserve"><value>A: mostrar nomes dos itens no chão</value></data>
   <data name="Settings.Keys10" xml:space="preserve"><value>1-3: consumíveis no cinto</value></data>
   <data name="Settings.Keys11" xml:space="preserve"><value>Shift: ação alternativa</value></data>
+  <data name="Settings.MobileGraphics" xml:space="preserve"><value>Gráficos</value></data>
+  <data name="Settings.MobileResolution" xml:space="preserve"><value>Resolução: {0} ({1}%)</value></data>
+  <data name="Settings.MobileResolution.High" xml:space="preserve"><value>Alta</value></data>
+  <data name="Settings.MobileResolution.Medium" xml:space="preserve"><value>Média</value></data>
+  <data name="Settings.MobileResolution.Low" xml:space="preserve"><value>Baixa</value></data>
+  <data name="Settings.MobileSkyOn" xml:space="preserve"><value>Céu realista e sombras: ligado</value></data>
+  <data name="Settings.MobileSkyOff" xml:space="preserve"><value>Céu realista e sombras: desligado</value></data>
+  <data name="Settings.MobileHint" xml:space="preserve"><value>Toque numa opção para alterar</value></data>
 </root>

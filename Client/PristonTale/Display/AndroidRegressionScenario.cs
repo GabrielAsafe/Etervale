@@ -18,6 +18,7 @@ internal static class AndroidRegressionScenario
     private static long _deadline;
     private static bool _finished;
     private static readonly string[] Graphics = ["baseline", "shadows_on", "shadows_off", "bloom_on", "bloom_off", "fxaa", "taa", "msaa2", "msaa4", "restored"];
+    private static readonly string[] MobileGraphics = ["high_off", "medium_off", "low_off", "high_on", "medium_on", "low_on"];
     private static readonly string[] Pacing = ["unlimited_a", "cap30", "cap60", "unlimited_b"];
     private static readonly string[] Performance = ["baseline", "lights8", "lights16", "lights32", "restored"];
 
@@ -32,7 +33,7 @@ internal static class AndroidRegressionScenario
         }
         if (_deadline != 0 && now < _deadline) return;
         var baseline = _baseline ??= presentation.Requested;
-        var phases = AndroidRegressionSession.Scenario switch { "graphics" => Graphics, "pacing" => Pacing, _ => Performance };
+        var phases = AndroidRegressionSession.Scenario switch { "graphics" => Graphics, "pacing" => Pacing, "mobile_graphics" => MobileGraphics, _ => Performance };
         if (_index == phases.Length)
         {
             presentation.Requested = baseline;
@@ -41,6 +42,19 @@ internal static class AndroidRegressionScenario
             return;
         }
         var phase = phases[_index++];
+        if (AndroidRegressionSession.Scenario == "mobile_graphics")
+        {
+            var resolution = phase.StartsWith("high", StringComparison.Ordinal) ? MobileResolution.High
+                : phase.StartsWith("medium", StringComparison.Ordinal) ? MobileResolution.Medium : MobileResolution.Low;
+            presentation.Requested = MobileGraphicsPolicy.Apply(baseline with
+            {
+                MobileResolution = resolution,
+                MobileRealisticSky = phase.EndsWith("_on", StringComparison.Ordinal)
+            });
+            MobileDiagnosticTrace.Mark("regression_phase_" + phase);
+            _deadline = now + Stopwatch.Frequency * HoldSeconds;
+            return;
+        }
         var common = baseline with { MaxFps = 0, BackgroundMaxFps = 0, VerticalSync = false, AntiAliasing = AntiAliasingMode.Off,
             MultiSampleCount = 0, ShadowsEnabled = false, Bloom = BloomQuality.Off, AmbientOcclusion = false, ContactShadows = false,
             AutoExposure = false, ColorGrading = false, ScreenSpaceReflections = false, VolumetricLight = false, ImageBasedLighting = false,

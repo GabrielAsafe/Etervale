@@ -25,9 +25,7 @@ internal static class EtervaleAndroidStartup
             return path;
         }
 
-        // Low is appropriate for the OPPO Mali-G57, and avoids the desktop's
-        // four high-resolution cascaded shadow maps, PCSS, AO and expensive TAA.
-        var settings = new ClientSettings
+        var settings = MobileGraphicsPolicy.Apply(new ClientSettings
         {
             // ETERVALE_ANDROID_V6_STARTUP_DEFAULTS
             // Cada utilizador configura o endpoint TLS no seu client-settings.json.
@@ -36,16 +34,12 @@ internal static class EtervaleAndroidStartup
             Language = "pt-BR",
             WindowWidth = 1280,
             WindowHeight = 720,
-            MultiSampleCount = 0,
-            MaxFps = 30,
-            BackgroundMaxFps = 15,
-            UiScale = 1.5f,
-            VerticalSync = true
-        }.WithQuality(GraphicsQuality.Low);
+            UiScale = 1.5f
+        });
 
         File.WriteAllText(path, JsonSerializer.Serialize(settings,
             new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
-        Log.Info("ETERVALE_3D", "Definicoes Android criadas: " + path + " quality=Low");
+        Log.Info("ETERVALE_3D", "Definicoes Android criadas: " + path + " mobile graphics=High");
         return path;
     }
 }

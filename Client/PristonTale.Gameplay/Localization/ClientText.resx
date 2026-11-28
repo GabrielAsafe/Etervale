@@ -967,4 +967,12 @@ go on to the high tower.</value></data>
   <data name="Settings.Keys9" xml:space="preserve"><value>A: show ground loot names</value></data>
   <data name="Settings.Keys10" xml:space="preserve"><value>1-3: potion belt</value></data>
   <data name="Settings.Keys11" xml:space="preserve"><value>Shift: alternate action</value></data>
+  <data name="Settings.MobileGraphics" xml:space="preserve"><value>Graphics</value></data>
+  <data name="Settings.MobileResolution" xml:space="preserve"><value>Resolution: {0} ({1}%)</value></data>
+  <data name="Settings.MobileResolution.High" xml:space="preserve"><value>High</value></data>
+  <data name="Settings.MobileResolution.Medium" xml:space="preserve"><value>Medium</value></data>
+  <data name="Settings.MobileResolution.Low" xml:space="preserve"><value>Low</value></data>
+  <data name="Settings.MobileSkyOn" xml:space="preserve"><value>Realistic sky and shadows: on</value></data>
+  <data name="Settings.MobileSkyOff" xml:space="preserve"><value>Realistic sky and shadows: off</value></data>
+  <data name="Settings.MobileHint" xml:space="preserve"><value>Tap a row to change it</value></data>
 </root>

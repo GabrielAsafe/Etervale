@@ -51,6 +51,22 @@ the in-game Settings panel, and how a change reaches the display, the renderer a
 - A file is not rewritten just because it lacks fields or holds invalid values; it is rewritten at the next accepted
   change.
 
+## Android graphics profile
+
+The Android client applies a mobile profile after loading settings. The `mobileResolution` field accepts `High`
+(native, the default), `Medium` (75% per axis) or `Low` (50% per axis); `mobileRealisticSky` enables both the
+physical sky and shadows and defaults to false. These fields are omitted from JSON at their defaults. The
+profile uses 60 FPS foreground and 30 FPS background limits, disables VSync, anti-aliasing, MSAA, optional
+depth pre-pass, AO, contact shadows, IBL, SSR, volumetric light, bloom, auto exposure and colour grading,
+and uses eight local lights. When enabled, sun shadows use a 1024-pixel atlas, two cascades, PCF and 30 Hz updates;
+lamp shadows remain off. The renderer scales only full-back-buffer gameplay scenes and composes into the original
+viewport before the HUD is drawn. Desktop rendering and window dimensions do not use the mobile profile.
+The Android Settings panel opens on its graphics page with only a resolution cycle and a combined sky/shadow toggle;
+its second page retains audio, language, target/nameplate and camera preferences. Choices apply at the normal frame
+boundary without a display preview and are saved asynchronously. The existing weather preference is unchanged.
+Debug regression scenarios can override effective settings at the presentation boundary without saving those overrides.
+A settings file containing non-default mobile fields must be backed up before downgrading to a client that predates them.
+
 ## Fields
 
 "Panel" marks fields the in-game Settings panel edits; every other field is edited in the file. "Display" fields
@@ -73,6 +89,7 @@ renderer through `PresentationSettings.ApplyRendering` and apply at once.
 | `musicEnabled`, `soundEnabled` | bool, `true`, `true` | | yes (BGM, Audio) | Read by `PristonAudioLibrary.ApplySettings` every update; the login and character screens ignore them. |
 | `maxFps` | int, `0` | 0 or 15-1000 | yes: 0, 30, 60, 90, 120, 144, 165, 240, 360 | Foreground frame limit; 0 unlimited. `PresentationController.Pace` sleeps in 1-4 ms steps only until the next deadline, after frame work and presentation. Over-budget frames do not wait; a missed deadline re-anchors the cadence without catch-up. Changing the limit starts a new cadence without an initial wait. |
 | `backgroundMaxFps` | int, `30` | 0 or 15-1000 | yes (same list) | Limit while the window is inactive: `min(maxFps, backgroundMaxFps)`, or `backgroundMaxFps` when `maxFps` is 0; 0 means "use `maxFps`". |
+| `mobileResolution`, `mobileRealisticSky` | enum `High`, bool `false` | `High`, `Medium`, `Low`; boolean | Android only | Internal gameplay scale and combined physical sky/shadows. No swapchain change. |
 | `uiScale` | float, `1` | 0.75-1.5 | | Validated and stored only; the in-game HUD always uses the largest integer scale that fits. |
 | `classicTargetHealthBar` | bool, `false` | | yes (Target HP) | `false`: the target frame always shows the HP bar with level and life percentage. `true`: the bar, without numbers, appears only after you attack a monster at full life. Either way the frame shows a live 3D portrait of the target's head, its name and, for monsters, the race icon. |
 | `cameraSceneryCollision` | bool, `true` | | yes (Camera collision) | Enables the orbital camera's scenery collision sweep. Off affects the camera only; world collision and server authority stay unchanged. |

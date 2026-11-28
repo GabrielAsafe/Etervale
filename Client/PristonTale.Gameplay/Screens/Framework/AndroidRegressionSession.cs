@@ -65,7 +65,7 @@ public static class AndroidRegressionSession
 
         if (lines.Length == 4)
         {
-            if (lines[3] is not ("rotation" or "graphics" or "pacing" or "performance"))
+            if (lines[3] is not ("rotation" or "graphics" or "pacing" or "performance" or "mobile_graphics"))
             {
                 return false;
             }

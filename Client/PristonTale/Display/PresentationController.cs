@@ -49,6 +49,10 @@ internal sealed class PresentationController
         if (requested != _applied && !_shared.AwaitingConfirmation)
         {
             requested = requested.Validate(ConsoleClientLog.Instance);
+            if (OperatingSystem.IsAndroid() && !RegressionOverrideActive)
+            {
+                requested = MobileGraphicsPolicy.Apply(requested);
+            }
             _shared.Requested = requested;
             var preview = !requested.HasSameDisplay(_applied);
             Apply(requested);
@@ -180,6 +184,10 @@ internal sealed class PresentationController
         {
             ConsoleClientLog.Instance.Error("[Display] Requested configuration failed; restoring the accepted settings.", exception);
             var fallback = _applied is null ? new ClientSettings() : _accepted;
+            if (OperatingSystem.IsAndroid() && !RegressionOverrideActive)
+            {
+                fallback = MobileGraphicsPolicy.Apply(fallback);
+            }
             // PreparingDeviceSettings reads Requested, so rollback must publish it before ApplyChanges.
             _shared.Requested = fallback;
             _shared.EffectiveDisplay = _display.Apply(fallback);
@@ -189,11 +197,27 @@ internal sealed class PresentationController
         }
     }
 
+    private static bool RegressionOverrideActive
+    {
+        get
+        {
+#if DEBUG
+            return OperatingSystem.IsAndroid() && PristonTale.Gameplay.Screens.Framework.AndroidRegressionSession.Active
+                && PristonTale.Gameplay.Screens.Framework.AndroidRegressionSession.Scenario != "rotation";
+#else
+            return false;
+#endif
+        }
+    }
+
     private void Accept()
     {
         _accepted = _applied;
         _shared.Requested = _applied;
         _shared.AwaitingConfirmation = false;
-        _store.QueueSave(_accepted);
+        if (!RegressionOverrideActive)
+        {
+            _store.QueueSave(_accepted);
+        }
     }
 }

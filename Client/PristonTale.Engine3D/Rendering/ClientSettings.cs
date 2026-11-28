@@ -56,6 +56,10 @@ public sealed record ClientSettings
     public int MaxFps { get; init; }
     public int BackgroundMaxFps { get; init; } = 30;
     public float UiScale { get; init; } = 1f;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public MobileResolution MobileResolution { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool MobileRealisticSky { get; init; }
     public int MultiSampleCount { get; init; } = 4;
     public int ShadowMapSize { get; init; } = 4096;
     // Cube faces of the lamp shadows (the nearest LampShadowCount lamps, 0, 2 or 4), in pixels.
@@ -133,6 +137,7 @@ public sealed record ClientSettings
             MaxFps = IsValidFps(MaxFps) ? MaxFps : defaults.MaxFps,
             BackgroundMaxFps = IsValidFps(BackgroundMaxFps) ? BackgroundMaxFps : defaults.BackgroundMaxFps,
             UiScale = float.IsFinite(UiScale) && UiScale is >= 0.75f and <= 1.5f ? UiScale : defaults.UiScale,
+            MobileResolution = Enum.IsDefined(MobileResolution) ? MobileResolution : defaults.MobileResolution,
             MultiSampleCount = MultiSampleCount is 0 or 2 or MostMultiSamples ? MultiSampleCount : defaults.MultiSampleCount,
             ShadowMapSize = ShadowMapSize is 1024 or 2048 or 4096 or 8192 ? ShadowMapSize : defaults.ShadowMapSize,
             LampShadowTileSize = LampShadowTileSize is 256 or 512 or 1024 ? LampShadowTileSize : defaults.LampShadowTileSize,
@@ -261,7 +266,8 @@ public sealed record ClientSettings
     // The options PristonRenderer reads (PresentationSettings.ApplyRendering).
     public bool HasSameRendering(ClientSettings other)
     {
-        return ShadowMapSize == other.ShadowMapSize
+        return MobileResolution == other.MobileResolution
+            && ShadowMapSize == other.ShadowMapSize
             && LampShadowTileSize == other.LampShadowTileSize
             && ShadowUpdateRate == other.ShadowUpdateRate
             && ShadowsEnabled == other.ShadowsEnabled
