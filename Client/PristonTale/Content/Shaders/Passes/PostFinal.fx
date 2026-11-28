@@ -202,11 +202,23 @@ float3 SharpenedScene(float2 uv, float exposure)
 
 float4 PS_Tonemap(FullscreenOut i) : SV_Target0
 {
-    float exposure = ToneParams.w > 0.0 ? ToneParams.w : ExposureState[0].y;
+    float exposure = ToneParams.w;
+    [branch]
+    if (!(exposure > 0.0))
+    {
+        exposure = ExposureState[0].y;
+    }
+
     float2 uv = SourceRect.xy + i.Uv * SourceRect.zw;
     float3 scene = SharpenedScene(uv, exposure);
-    float3 bloom = min(Bloom.SampleLevel(BloomSampler, uv, 0).rgb, HdrCap);
-    float3 hdr = lerp(scene, bloom, ToneParams.z);
+    float3 hdr = scene;
+    [branch]
+    if (ToneParams.z > 0.0)
+    {
+        float3 bloom = min(Bloom.SampleLevel(BloomSampler, uv, 0).rgb, HdrCap);
+        hdr = lerp(scene, bloom, ToneParams.z);
+    }
+
     float3 display;
     [branch]
     if (DebugParams.x > 0.5)
@@ -216,7 +228,12 @@ float4 PS_Tonemap(FullscreenOut i) : SV_Target0
     }
     else
     {
-        display = Grade(LinearToSrgb(DisplayTransform(MesopicVision(hdr, DebugParams.y, MesopicParams.xyz) * exposure)));
+        display = LinearToSrgb(DisplayTransform(MesopicVision(hdr, DebugParams.y, MesopicParams.xyz) * exposure));
+        [branch]
+        if (ToneParams.y > 0.0)
+        {
+            display = Grade(display);
+        }
     }
 
     display = Dither8(display, i.Uv * ScreenParams.xy);

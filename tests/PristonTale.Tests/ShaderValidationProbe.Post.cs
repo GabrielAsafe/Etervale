@@ -27,6 +27,7 @@ internal sealed partial class ShaderValidationProbe
         }
 
         VerifyGrade();
+        VerifyOptionalFinalEffects();
         VerifyTemporalResolve();
         VerifyLightCulling();
         VerifyEnvironment();
@@ -160,6 +161,74 @@ internal sealed partial class ShaderValidationProbe
             var actual = ComposeFlat(new Vector3(value), settings);
             Assert.True(MathF.Abs(actual.R - expected) <= 2.5f, $"colour grade at {value}: expected {expected:F1}, got {actual}");
             _verified++;
+        }
+    }
+
+    private void VerifyOptionalFinalEffects()
+    {
+        using var scene = new RenderTarget2D(GraphicsDevice, TargetSize, TargetSize, false, SurfaceFormat.HalfVector4, DepthFormat.None);
+        using var bloom = new RenderTarget2D(GraphicsDevice, TargetSize, TargetSize, false, SurfaceFormat.HalfVector4, DepthFormat.None);
+        using var output = new RenderTarget2D(GraphicsDevice, TargetSize, TargetSize, false, SurfaceFormat.Color, DepthFormat.None);
+        using var triangle = new PristonFullscreenTriangle(GraphicsDevice);
+        using var effect = Content.Load<Effect>(PristonPostProcessor.FinalAsset).Clone();
+        using var lut = PristonColorGrading.Upload(GraphicsDevice, PristonColorGrading.BuildPixels(string.Empty, ConsoleClientLog.Instance));
+        using var exposure = new StructuredBuffer(GraphicsDevice, 16, 1, BufferShaderAccess.ReadWrite);
+        const float storedMultiplier = 2f;
+        exposure.SetData(new[] { new Vector4(0f, storedMultiplier, 0f, 1f) });
+        var radiance = new Vector3(0.125f, 0.25f, 0.5f);
+        var bloomRadiance = new Vector3(4f, 2f, 0.25f);
+        GraphicsDevice.SetRenderTarget(scene);
+        GraphicsDevice.Clear(ClearOptions.Target, new Vector4(radiance, 1f), 1f, 0);
+        GraphicsDevice.SetRenderTarget(bloom);
+        GraphicsDevice.Clear(ClearOptions.Target, new Vector4(bloomRadiance, 1f), 1f, 0);
+        GraphicsDevice.SetRenderTarget(null);
+
+        effect.CurrentTechnique = effect.Techniques["Tonemap"];
+        effect.Parameters["Scene"].SetValue(scene);
+        effect.Parameters["Bloom"].SetValue(bloom);
+        effect.Parameters["Lut"].SetValue(lut);
+        effect.Parameters["ExposureState"].SetValue(exposure);
+        effect.Parameters["SourceRect"].SetValue(new Vector4(0f, 0f, 1f, 1f));
+        effect.Parameters["ScreenParams"].SetValue(new Vector4(TargetSize, TargetSize, 0f, 0f));
+        const float inversePreExposure = 4f;
+        var nightHue = new PristonDayNightCycle().NightHue;
+        effect.Parameters["DebugParams"].SetValue(new Vector4(0f, inversePreExposure, 0f, 0f));
+        effect.Parameters["MesopicParams"].SetValue(new Vector4(nightHue, 0f));
+        var pixels = new Color[TargetSize * TargetSize];
+        foreach (var fixedMultiplier in new[] { 0f, 1f })
+        {
+            foreach (var strength in new[] { 0f, PristonPostProcessor.BloomStrength(BloomQuality.High) })
+            {
+                foreach (var grade in new[] { false, true })
+                {
+                    effect.Parameters["ToneParams"].SetValue(new Vector4((float)TonemapperMode.PbrNeutral,
+                        grade ? 1f : 0f, strength, fixedMultiplier));
+                    GraphicsDevice.SetRenderTarget(output);
+                    GraphicsDevice.BlendState = BlendState.Opaque;
+                    triangle.Draw(effect);
+                    GraphicsDevice.SetRenderTarget(null);
+                    output.GetData(pixels);
+
+                    var multiplier = fixedMultiplier > 0f ? fixedMultiplier : storedMultiplier;
+                    var hdr = Vector3.Lerp(radiance, bloomRadiance, strength);
+                    var linear = PristonDisplayTransform.Apply(TonemapperMode.PbrNeutral,
+                        PristonDisplayTransform.Mesopic(hdr, inversePreExposure, nightHue) * multiplier);
+                    var encoded = new Vector3(PristonColorSpace.LinearToSrgb(linear.X),
+                        PristonColorSpace.LinearToSrgb(linear.Y), PristonColorSpace.LinearToSrgb(linear.Z));
+                    if (grade)
+                    {
+                        encoded = PristonColorGrading.BuiltInLook(encoded);
+                    }
+
+                    var expected = encoded * 255f;
+                    var actual = pixels[(TargetSize / 2) * TargetSize + TargetSize / 2];
+                    var delta = new Vector3(actual.R, actual.G, actual.B) - expected;
+                    var error = Vector3.Max(delta, -delta);
+                    Assert.True(MathF.Max(error.X, MathF.Max(error.Y, error.Z)) <= 2.5f,
+                        $"optional final effects fixed={fixedMultiplier} bloom={strength} grade={grade}: expected {expected}, got {actual}");
+                    _verified++;
+                }
+            }
         }
     }
 

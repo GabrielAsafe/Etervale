@@ -50,6 +50,10 @@ Each `.fx` in `Passes/` builds to `Effects/<Name>` (the asset name the C# owner 
 | `Effects/PostFinal` | `PostFinal.fx` | `Tonemap`, `Fxaa` | `Post/PristonPostProcessor` | Sharpening, scene + bloom, mesopic vision, exposure, PBR Neutral/AgX/ACES, sRGB, 3D LUT grade, dither, luma in alpha; FXAA on the 8-bit image. |
 | `Effects/PostSmaa` | `PostSmaa.fx` | `EdgeDetection`, `BlendingWeights`, `NeighborhoodBlending` | `Post/PristonSmaa` | SMAA 1x (preset HIGH) on the 8-bit display image. |
 
+The final pass skips the exposure-buffer read for a positive fixed multiplier and skips bloom and grade texture
+samples at zero strength. The shared path keeps sharpening, mesopic vision, display transforms, sRGB, dithering and
+luma output unchanged; the same resource bindings remain valid for enabled effects.
+
 ### Surface.fx register map
 
 Both stages use one cbuffer at `b0`: vertex `SurfaceVertexConstants` (view-projection, caster matrices, UV scrolls,
