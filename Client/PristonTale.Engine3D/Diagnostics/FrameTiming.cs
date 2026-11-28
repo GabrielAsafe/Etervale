@@ -12,7 +12,10 @@ public readonly record struct FrameTimingSample(
     int FramesOver60HzBudget,
     double PresentP95Ms,
     double PresentP99Ms,
-    double PacingP95Ms = 0);
+    double PacingP95Ms = 0,
+    double UpdateBytesPerFrame = 0,
+    double DrawBytesPerFrame = 0,
+    double PresentBytesPerFrame = 0);
 
 public sealed class FrameTiming
 {
@@ -22,7 +25,9 @@ public sealed class FrameTiming
     private readonly double[] _work = new double[Capacity];
     private readonly double[] _presentation = new double[Capacity];
     private readonly double[] _pacing = new double[Capacity];
-    private readonly long[] _allocations = new long[Capacity];
+    private readonly long[] _updateAllocations = new long[Capacity];
+    private readonly long[] _drawAllocations = new long[Capacity];
+    private readonly long[] _presentAllocations = new long[Capacity];
     private readonly double[] _scratch = new double[Capacity];
     private int _count;
     private int _next;
@@ -45,7 +50,9 @@ public sealed class FrameTiming
             _work[_next] = (_updateTicks + Math.Max(0, end - start)) * 1000d / Stopwatch.Frequency;
             _presentation[_next] = 0;
             _pacing[_next] = 0;
-            _allocations[_next] = _updateBytes + Math.Max(0, allocatedBytes);
+            _updateAllocations[_next] = _updateBytes;
+            _drawAllocations[_next] = Math.Max(0, allocatedBytes);
+            _presentAllocations[_next] = 0;
             _next = (_next + 1) % Capacity;
             _count = Math.Min(_count + 1, Capacity);
         }
@@ -64,7 +71,7 @@ public sealed class FrameTiming
 
         var index = (_next + Capacity - 1) % Capacity;
         _presentation[index] = Math.Max(0, elapsedTicks) * 1000d / Stopwatch.Frequency;
-        _allocations[index] += Math.Max(0, allocatedBytes);
+        _presentAllocations[index] += Math.Max(0, allocatedBytes);
     }
 
     public bool TrySample(long now, out FrameTimingSample sample, int maxFrames = int.MaxValue)
@@ -78,7 +85,9 @@ public sealed class FrameTiming
         _lastSample = now;
         var total = 0d;
         var overBudget = 0;
-        var allocatedBytes = 0L;
+        var updateBytes = 0L;
+        var drawBytes = 0L;
+        var presentBytes = 0L;
         // The newest frames, even after the ring wraps. A shorter window responds
         // to quality changes on slow devices without changing desktop sampling.
         var count = Math.Min(_count, Math.Max(1, maxFrames));
@@ -87,7 +96,9 @@ public sealed class FrameTiming
         {
             var index = (first + offset) % Capacity;
             total += _frames[index];
-            allocatedBytes += _allocations[index];
+            updateBytes += _updateAllocations[index];
+            drawBytes += _drawAllocations[index];
+            presentBytes += _presentAllocations[index];
             if (_frames[index] > 1000d / 60)
             {
                 overBudget++;
@@ -98,7 +109,8 @@ public sealed class FrameTiming
         var work = Percentiles(_work, first, count);
         var presentation = Percentiles(_presentation, first, count);
         sample = new FrameTimingSample(count * 1000d / total, frames.P95, frames.P99, work.P95, work.P99,
-            (double)allocatedBytes / count, overBudget, presentation.P95, presentation.P99, Percentiles(_pacing, first, count).P95);
+            (double)(updateBytes + drawBytes + presentBytes) / count, overBudget, presentation.P95, presentation.P99,
+            Percentiles(_pacing, first, count).P95, (double)updateBytes / count, (double)drawBytes / count, (double)presentBytes / count);
         return true;
     }
 

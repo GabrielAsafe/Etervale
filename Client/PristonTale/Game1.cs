@@ -171,6 +171,8 @@ public class Game1 : Game
                 + $" | AO={settings.AmbientOcclusion} contact={settings.ContactShadows} exposure={settings.AutoExposure}"
                 + $" | bloom={settings.Bloom} grading={settings.ColorGrading} SSR={settings.ScreenSpaceReflections}"
                 + $" | volumetric={settings.VolumetricLight} localLightLimit={settings.LocalLightLimit}"
+                + FormattableString.Invariant($" | allocBytes/frame update={sample.UpdateBytesPerFrame:F1} draw={sample.DrawBytesPerFrame:F1} present={sample.PresentBytesPerFrame:F1}")
+                + $" | gcCollectionsTotal gen0={GC.CollectionCount(0)} gen1={GC.CollectionCount(1)} gen2={GC.CollectionCount(2)}"
                 + $" | finalizersQueued={GraphicsDevice.EtervaleNativeFinalizersQueued}"
                 + $" finalizersDrained={GraphicsDevice.EtervaleNativeFinalizersDrained}"
                 + $" finalizersRejected={GraphicsDevice.EtervaleNativeFinalizersRejected}");

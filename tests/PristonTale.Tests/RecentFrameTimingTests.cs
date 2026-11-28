@@ -28,6 +28,8 @@ internal static class RecentFrameTimingTests
         Assert.True(Math.Abs(recent.FrameP95Ms - 20) < 0.01, "incorrect recent percentile");
         Assert.True(Math.Abs(recent.PresentP95Ms - 10) < 0.01, "incorrect presentation percentile");
         Assert.True(recent.AllocatedBytesPerFrame == 500, "incorrect recent allocation average");
+        Assert.True(recent.UpdateBytesPerFrame == 200 && recent.DrawBytesPerFrame == 200 && recent.PresentBytesPerFrame == 100,
+            "older allocation phases contaminated the recent window");
         Assert.True(timing.TrySample(now + Stopwatch.Frequency, out var full), "full sample missing");
         Assert.True(full.FramesPerSecond < 15, "desktop full history was discarded");
         return Task.CompletedTask;

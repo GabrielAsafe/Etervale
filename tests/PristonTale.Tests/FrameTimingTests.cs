@@ -31,6 +31,8 @@ internal static class FrameTimingTests
         Assert.True(Math.Abs(sample.WorkP95Ms - 3) < 0.01, "multiple updates before one draw were lost");
         Assert.True(Math.Abs(sample.PacingP95Ms - 2) < 0.01, "pacing was lost or added to Update/Draw work");
         Assert.True(sample.AllocatedBytesPerFrame == 120 && sample.FrameP99Ms >= sample.FrameP95Ms, "allocation accounting or percentile order changed");
+        Assert.True(sample.UpdateBytesPerFrame == 48 && sample.DrawBytesPerFrame == 64 && sample.PresentBytesPerFrame == 8,
+            "allocation phase accounting changed");
         Assert.True(Math.Abs(sample.PresentP95Ms - 5) < 0.01 && sample.PresentP99Ms >= sample.PresentP95Ms,
             "presentation wait was lost or counted as Update/Draw work");
         for (var index = 0; index < 360; index++)
@@ -44,6 +46,8 @@ internal static class FrameTimingTests
             "rolling window hid slow frames or retained stale samples");
         Assert.True(sample.PresentP95Ms == 0 && sample.PresentP99Ms == 0, "rolling window retained stale presentation waits");
         Assert.True(sample.PacingP95Ms == 0, "rolling window retained stale pacing waits");
+        Assert.True(sample.UpdateBytesPerFrame == 0 && sample.DrawBytesPerFrame == 0 && sample.PresentBytesPerFrame == 0,
+            "rolling window retained stale allocation phases");
         return Task.CompletedTask;
     }
 }

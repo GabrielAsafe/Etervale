@@ -24,6 +24,9 @@ public sealed class GameplayScreen : GameScreen
     private double _perfPortraitMs;
     private double _perfSceneMs;
     private double _perfHudMs;
+    private long _perfPortraitBytes;
+    private long _perfSceneBytes;
+    private long _perfHudBytes;
     private long _lastGpuPerfLog;
     private bool _mobileFirstGameplayDraw;
 
@@ -39,6 +42,7 @@ public sealed class GameplayScreen : GameScreen
             + $" | sceneMsaa={renderer.EffectiveMultiSampleCount}"
             + $" | depthPrepass={(renderer.SceneLinearDepth is null ? "off" : "on")}"
             + $" | CPU draw: scene {_perfSceneMs:F1} HUD {_perfHudMs:F1} portrait {_perfPortraitMs:F1} ms"
+            + $" | drawAllocLast scene={_perfSceneBytes} hud={_perfHudBytes} portrait={_perfPortraitBytes}"
             + $" | CPU passes: prepass {p.CpuLast(RenderSection.Prepass):F1} opaque {p.CpuLast(RenderSection.Opaque):F1} masked {p.CpuLast(RenderSection.Masked):F1}"
             + $" | CPU passes: sky {p.CpuLast(RenderSection.Sky):F1} lights {p.CpuLast(RenderSection.LightCulling):F1} shadows {p.CpuLast(RenderSection.SunShadow):F1}"
             + $" | CPU passes: display {p.CpuLast(RenderSection.DisplayTransform):F1} exposure {p.CpuLast(RenderSection.Exposure):F1} queue {p.CpuLast(RenderSection.Queue):F1}";
@@ -267,17 +271,34 @@ public sealed class GameplayScreen : GameScreen
     {
         var mobile = OperatingSystem.IsAndroid();
         var started = mobile ? Stopwatch.GetTimestamp() : 0L;
+        var allocated = mobile ? GC.GetAllocatedBytesForCurrentThread() : 0L;
         _hud.RenderPortrait();
-        if (mobile) _perfPortraitMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        if (mobile)
+        {
+            _perfPortraitBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
+            _perfPortraitMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        }
+
         started = mobile ? Stopwatch.GetTimestamp() : 0L;
+        allocated = mobile ? GC.GetAllocatedBytesForCurrentThread() : 0L;
         Context.GraphicsDevice.Clear(_scene.SkyColor);
         _scene.Draw();
-        if (mobile) _perfSceneMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        if (mobile)
+        {
+            _perfSceneBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
+            _perfSceneMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        }
+
         started = mobile ? Stopwatch.GetTimestamp() : 0L;
+        allocated = mobile ? GC.GetAllocatedBytesForCurrentThread() : 0L;
         _scene.CollectGroundLabels(_groundLabels);
         _scene.DrawCombatText(Context.SpriteBatch, Context.Font);
         _hud.Draw();
-        if (mobile) _perfHudMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        if (mobile)
+        {
+            _perfHudBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
+            _perfHudMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        }
         if (mobile && !_mobileFirstGameplayDraw)
         {
             _mobileFirstGameplayDraw = true;

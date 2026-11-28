@@ -471,6 +471,13 @@ they took the domes.
   Absent results are `n/a`; reset and read misses are counted separately. Repeated sections retain the first completed
   GPU query pair for the frame. GPU timestamp intervals may overlap; they are not additive and can include gaps between commands.
   Durations use the selected queue family's timestamp width; unsupported queues leave GPU timing unavailable.
+- `FrameTiming` separates managed render-thread allocations from Update, Draw and Present; Android `allocBytes/frame`
+  reports their means over the same recent frame window as FPS, and preserves the total KB/frame. `drawAllocLast`
+  reports the last completed gameplay draw's scene, HUD (including combat text and ground labels) and portrait allocations.
+  These are instantaneous subregions of Draw, not window averages; other Draw work is not included in their sum.
+  `gcCollectionsTotal` reports process-wide cumulative collection counts by generation, not pause durations.
+  The counters exclude native/GPU allocations and allocations on other threads. No per-frame strings or heap objects
+  are created by the new counters; Android emits them in its existing periodic performance log.
 - `LastStreamingStats`: per `StreamingStep` count, total and worst main-thread milliseconds and bytes of the last stage
   upload (`[Stream] upload steps` log line).
 - `--benchmark-render <assets> <content> <report.json> <fieldId> <settings.json> [seconds runs hour orbit [distance
