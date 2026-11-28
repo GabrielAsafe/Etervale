@@ -7,6 +7,7 @@ internal static class RenderFidelityTests
 {
     public static IEnumerable<(string, Func<Task>)> Cases()
     {
+        yield return ("apk69: shipped XNB readers have explicit factories", XnbReadersAsync);
         yield return ("mip chains reach 1x1 for every texture and average colour in linear light", MipChainLinearAsync);
         yield return ("loading optimizations: opaque mip chain matches unweighted linear colour at every level", OpaqueMipAsync);
         yield return ("mip chains weight colour by alpha so transparent key colours do not bleed", MipChainAlphaWeightedAsync);
@@ -16,6 +17,53 @@ internal static class RenderFidelityTests
         yield return ("vertex animation clock wraps on a common period without a phase jump", VertexClockAsync);
         yield return ("frame profiler accumulates CPU sections without GPU timers", ProfilerAsync);
         yield return ("original light levels map to illuminance by the calibrated power curve", LightLevelsAsync);
+    }
+
+    private static Task XnbReadersAsync()
+    {
+        static bool Registered(string name) => Microsoft.Xna.Framework.Content.ContentTypeReaderManager.HasTypeCreator(name);
+        const string effect = "Microsoft.Xna.Framework.Content.EffectReader";
+        Assert.True(Registered(effect + ", Microsoft.Xna.Framework.Graphics, Version=4.0.0.0, Culture=neutral, PublicKeyToken=842cf8be1de50553"),
+            "legacy effect reader alias was lost");
+        Assert.True(!Registered("Etervale.UnregisteredReader, UnknownAssembly"), "an unknown reader was accepted");
+        DirectoryInfo? repository = new DirectoryInfo(Directory.GetCurrentDirectory());
+        while (repository is not null && !File.Exists(Path.Combine(repository.FullName, "PristonTale.sln")))
+        {
+            repository = repository.Parent;
+        }
+
+        var repositoryPath = repository?.FullName ?? throw new InvalidOperationException("Repository not found");
+        var root = Path.Combine(repositoryPath, "Client", "PristonTale", "bin", "Release", "net10.0", "Content");
+        var files = Directory.GetFiles(root, "*.xnb", SearchOption.AllDirectories);
+        Assert.True(files.Length > 0, "No compiled XNB files found");
+        var staging = Path.Combine(repositoryPath, "Android", "EtervaleAndroidGame", "ContentStaging");
+        if (Directory.Exists(staging))
+        {
+            files = files.Concat(Directory.GetFiles(staging, "*.xnb", SearchOption.AllDirectories)).ToArray();
+        }
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var path in files)
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = new BinaryReader(stream);
+            Assert.True(reader.ReadBytes(3).AsSpan().SequenceEqual("XNB"u8), "Invalid XNB header: " + path);
+            reader.ReadByte(); // platform
+            reader.ReadByte(); // format version
+            Assert.True((reader.ReadByte() & 0xC0) == 0, "Expected uncompressed XNB: " + path);
+            Assert.True(reader.ReadInt32() == stream.Length, "Invalid XNB size: " + path);
+            var count = reader.Read7BitEncodedInt();
+            Assert.True(count is > 0 and < 256, "Invalid XNB reader count: " + path);
+            for (var i = 0; i < count; i++)
+            {
+                var name = reader.ReadString();
+                reader.ReadInt32(); // reader version
+                Assert.True(Registered(name), "Unregistered XNB reader: " + name);
+                names.Add(name);
+            }
+        }
+
+        Console.WriteLine($"XNB registry: {files.Length} assets, {names.Count} distinct reader names");
+        return Task.CompletedTask;
     }
 
     private static Task CloudNoiseAsync()

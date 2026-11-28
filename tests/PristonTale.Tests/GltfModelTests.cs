@@ -9,6 +9,7 @@ internal static class GltfModelTests
 {
     public static IEnumerable<(string, Func<Task>)> Cases()
     {
+        yield return ("apk69: glTF unknown JSON extension survives a round trip", UnknownExtensionAsync);
         yield return ("a glTF model reads its skin with normalized weights, its rigid parts, linear, step and cubic channels, the "
             + "metallic-roughness material with clearcoat, sheen and diffuse transmission, texture transforms and wraps, and "
             + "gives flat normals where they are missing", SyntheticAsync);
@@ -25,6 +26,36 @@ internal static class GltfModelTests
     // A 1x1 opaque white PNG.
     internal static readonly byte[] Png = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=");
+
+    private static Task UnknownExtensionAsync()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "priston-gltf-extension-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            const string json = """
+                {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"name":"test"}],"extensionsUsed":["ETV_test_trim"],"extensions":{"ETV_test_trim":{"nested":{"items":[1,true,"text",null,{"n":-2.5}]}}}}
+                """;
+            var input = Path.Combine(directory, "in.gltf");
+            var output = Path.Combine(directory, "out.gltf");
+            File.WriteAllText(input, json);
+            Assert.True(Convert.ToHexString(typeof(ModelRoot).Assembly.GetName().GetPublicKeyToken()!).Equals("6F8B67557D279FE6", StringComparison.Ordinal),
+                "SharpGLTF public assembly identity changed");
+            var model = ModelRoot.Load(input, new ReadSettings { Validation = SharpGLTF.Validation.ValidationMode.Skip });
+            model.SaveGLTF(output, new WriteSettings { Validation = SharpGLTF.Validation.ValidationMode.Skip });
+            using var original = System.Text.Json.JsonDocument.Parse(json);
+            using var saved = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(output));
+            var expected = original.RootElement.GetProperty("extensions").GetProperty("ETV_test_trim");
+            var actual = saved.RootElement.GetProperty("extensions").GetProperty("ETV_test_trim");
+            Assert.True(System.Text.Json.JsonElement.DeepEquals(expected, actual), "Unknown extension JSON changed");
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+
+        return Task.CompletedTask;
+    }
 
     private static Task SyntheticAsync()
     {

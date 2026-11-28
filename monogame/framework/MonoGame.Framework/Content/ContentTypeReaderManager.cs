@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections;
-using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using MonoGame.Framework.Utilities;
@@ -18,7 +17,7 @@ namespace Microsoft.Xna.Framework.Content
     {
         private static readonly object _locker;
 
-        private static readonly Dictionary<Type, ContentTypeReader> _contentReadersCache;
+        private static readonly Dictionary<string, Func<ContentTypeReader>> BuiltInCreators = new Dictionary<string, Func<ContentTypeReader>>(StringComparer.Ordinal);
 
         private Dictionary<Type, ContentTypeReader> _contentReaders;
 
@@ -29,89 +28,87 @@ namespace Microsoft.Xna.Framework.Content
         static ContentTypeReaderManager()
         {
             _locker = new object();
-            _contentReadersCache = new Dictionary<Type, ContentTypeReader>(255);
             _assemblyName = ReflectionHelpers.GetAssembly(typeof(ContentTypeReaderManager)).FullName;
 
-            // cache the most common type readers to avoid the most common AOT/trimming related issues
-            // (especially on MonoGame standard content types)
-            AddTypeCreator(typeof(AlphaTestEffectReader).FullName, () => new AlphaTestEffectReader());
-            AddTypeCreator(typeof(ArrayReader<int>).FullName, () => new ArrayReader<int>());
-            AddTypeCreator(typeof(ArrayReader<float>).FullName, () => new ArrayReader<float>());
-            AddTypeCreator(typeof(ArrayReader<char>).FullName, () => new ArrayReader<char>());
-            AddTypeCreator(typeof(ArrayReader<string>).FullName, () => new ArrayReader<string>());
-            AddTypeCreator(typeof(ArrayReader<Point>).FullName, () => new ArrayReader<Point>());
-            AddTypeCreator(typeof(ArrayReader<Vector2>).FullName, () => new ArrayReader<Vector2>());
-            AddTypeCreator(typeof(ArrayReader<Vector3>).FullName, () => new ArrayReader<Vector3>());
-            AddTypeCreator(typeof(ArrayReader<Matrix>).FullName, () => new ArrayReader<Matrix>());
-            AddTypeCreator(typeof(ArrayReader<Rectangle>).FullName, () => new ArrayReader<Rectangle>());
-            AddTypeCreator(typeof(ArrayReader<Color>).FullName, () => new ArrayReader<Color>());
-            AddTypeCreator(typeof(ArrayReader<StringReader>).FullName, () => new ArrayReader<StringReader>());
-            AddTypeCreator(typeof(BasicEffectReader).FullName, () => new BasicEffectReader());
-            AddTypeCreator(typeof(BooleanReader).FullName, () => new BooleanReader());
-            AddTypeCreator(typeof(BoundingBoxReader).FullName, () => new BoundingBoxReader());
-            AddTypeCreator(typeof(BoundingFrustumReader).FullName, () => new BoundingFrustumReader());
-            AddTypeCreator(typeof(BoundingSphereReader).FullName, () => new BoundingSphereReader());
-            AddTypeCreator(typeof(ByteReader).FullName, () => new ByteReader());
-            AddTypeCreator(typeof(CharReader).FullName, () => new CharReader());
-            AddTypeCreator(typeof(ColorReader).FullName, () => new ColorReader());
-            AddTypeCreator(typeof(CurveReader).FullName, () => new CurveReader());
-            AddTypeCreator(typeof(DateTimeReader).FullName, () => new DateTimeReader());
-            AddTypeCreator(typeof(DecimalReader).FullName, () => new DecimalReader());
+            // Built-in content readers are created directly, without reflection.
+            RegisterBuiltIn(() => new AlphaTestEffectReader());
+            RegisterBuiltIn(() => new ArrayReader<int>());
+            RegisterBuiltIn(() => new ArrayReader<float>());
+            RegisterBuiltIn(() => new ArrayReader<char>());
+            RegisterBuiltIn(() => new ArrayReader<string>());
+            RegisterBuiltIn(() => new ArrayReader<Point>());
+            RegisterBuiltIn(() => new ArrayReader<Vector2>());
+            RegisterBuiltIn(() => new ArrayReader<Vector3>());
+            RegisterBuiltIn(() => new ArrayReader<Matrix>());
+            RegisterBuiltIn(() => new ArrayReader<Rectangle>());
+            RegisterBuiltIn(() => new ArrayReader<Color>());
+            RegisterBuiltIn(() => new ArrayReader<StringReader>());
+            RegisterBuiltIn(() => new BasicEffectReader());
+            RegisterBuiltIn(() => new BooleanReader());
+            RegisterBuiltIn(() => new BoundingBoxReader());
+            RegisterBuiltIn(() => new BoundingFrustumReader());
+            RegisterBuiltIn(() => new BoundingSphereReader());
+            RegisterBuiltIn(() => new ByteReader());
+            RegisterBuiltIn(() => new CharReader());
+            RegisterBuiltIn(() => new ColorReader());
+            RegisterBuiltIn(() => new CurveReader());
+            RegisterBuiltIn(() => new DateTimeReader());
+            RegisterBuiltIn(() => new DecimalReader());
             // DictionaryReader<TKey, TValue>
-            AddTypeCreator(typeof(DoubleReader).FullName, () => new DoubleReader());
-            AddTypeCreator(typeof(DualTextureEffectReader).FullName, () => new DualTextureEffectReader());
-            AddTypeCreator(typeof(EffectMaterialReader).FullName, () => new EffectMaterialReader());
-            AddTypeCreator(typeof(EffectReader).FullName + ", " + _assemblyName, () => new EffectReader());
-            AddTypeCreator(typeof(EnumReader<Graphics.SpriteEffects>).FullName, () => new EnumReader<Graphics.SpriteEffects>());
-            AddTypeCreator(typeof(EnumReader<Graphics.Blend>).FullName, () => new EnumReader<Graphics.Blend>());
-            AddTypeCreator(typeof(EnvironmentMapEffectReader).FullName, () => new EnvironmentMapEffectReader());
-            AddTypeCreator(typeof(ExternalReferenceReader).FullName + ", " + _assemblyName, () => new ExternalReferenceReader());
-            AddTypeCreator(typeof(IndexBufferReader).FullName + ", " + _assemblyName, () => new IndexBufferReader());
-            AddTypeCreator(typeof(Int16Reader).FullName, () => new Int16Reader());
-            AddTypeCreator(typeof(Int32Reader).FullName, () => new Int32Reader());
-            AddTypeCreator(typeof(Int64Reader).FullName, () => new Int64Reader());
-            AddTypeCreator(typeof(ListReader<int>).FullName, () => new ListReader<int>());
-            AddTypeCreator(typeof(ListReader<float>).FullName, () => new ListReader<float>());
-            AddTypeCreator(typeof(ListReader<char>).FullName, () => new ListReader<char>());
-            AddTypeCreator(typeof(ListReader<string>).FullName, () => new ListReader<string>());
-            AddTypeCreator(typeof(ListReader<Point>).FullName, () => new ListReader<Point>());
-            AddTypeCreator(typeof(ListReader<Vector2>).FullName, () => new ListReader<Vector2>());
-            AddTypeCreator(typeof(ListReader<Vector3>).FullName, () => new ListReader<Vector3>());
-            AddTypeCreator(typeof(ListReader<Matrix>).FullName, () => new ListReader<Matrix>());
-            AddTypeCreator(typeof(ListReader<Rectangle>).FullName, () => new ListReader<Rectangle>());
-            AddTypeCreator(typeof(ListReader<Color>).FullName, () => new ListReader<Color>());
-            AddTypeCreator(typeof(ListReader<StringReader>).FullName, () => new ListReader<StringReader>());
-            AddTypeCreator(typeof(MatrixReader).FullName, () => new MatrixReader());
-            AddTypeCreator(typeof(ModelReader).FullName, () => new ModelReader());
+            RegisterBuiltIn(() => new DoubleReader());
+            RegisterBuiltIn(() => new DualTextureEffectReader());
+            RegisterBuiltIn(() => new EffectMaterialReader());
+            RegisterBuiltIn(() => new EffectReader());
+            RegisterBuiltIn(() => new EnumReader<Graphics.SpriteEffects>());
+            RegisterBuiltIn(() => new EnumReader<Graphics.Blend>());
+            RegisterBuiltIn(() => new EnvironmentMapEffectReader());
+            RegisterBuiltIn(() => new ExternalReferenceReader());
+            RegisterBuiltIn(() => new IndexBufferReader());
+            RegisterBuiltIn(() => new Int16Reader());
+            RegisterBuiltIn(() => new Int32Reader());
+            RegisterBuiltIn(() => new Int64Reader());
+            RegisterBuiltIn(() => new ListReader<int>());
+            RegisterBuiltIn(() => new ListReader<float>());
+            RegisterBuiltIn(() => new ListReader<char>());
+            RegisterBuiltIn(() => new ListReader<string>());
+            RegisterBuiltIn(() => new ListReader<Point>());
+            RegisterBuiltIn(() => new ListReader<Vector2>());
+            RegisterBuiltIn(() => new ListReader<Vector3>());
+            RegisterBuiltIn(() => new ListReader<Matrix>());
+            RegisterBuiltIn(() => new ListReader<Rectangle>());
+            RegisterBuiltIn(() => new ListReader<Color>());
+            RegisterBuiltIn(() => new ListReader<StringReader>());
+            RegisterBuiltIn(() => new MatrixReader());
+            RegisterBuiltIn(() => new ModelReader());
             // MultiArrayReader<T>
-            AddTypeCreator(typeof(NullableReader<Rectangle>).FullName, () => new NullableReader<Rectangle>());
-            AddTypeCreator(typeof(PlaneReader).FullName, () => new PlaneReader());
-            AddTypeCreator(typeof(PointReader).FullName, () => new PointReader());
-            AddTypeCreator(typeof(QuaternionReader).FullName, () => new QuaternionReader());
-            AddTypeCreator(typeof(RayReader).FullName, () => new RayReader());
-            AddTypeCreator(typeof(RectangleReader).FullName, () => new RectangleReader());
+            RegisterBuiltIn(() => new NullableReader<Rectangle>());
+            RegisterBuiltIn(() => new PlaneReader());
+            RegisterBuiltIn(() => new PointReader());
+            RegisterBuiltIn(() => new QuaternionReader());
+            RegisterBuiltIn(() => new RayReader());
+            RegisterBuiltIn(() => new RectangleReader());
             // ReflectiveReader<T>
-            AddTypeCreator(typeof(SByteReader).FullName, () => new SByteReader());
-            AddTypeCreator(typeof(SingleReader).FullName, () => new SingleReader());
-            AddTypeCreator(typeof(SkinnedEffectReader).FullName, () => new SkinnedEffectReader());
-            AddTypeCreator(typeof(SongReader).FullName, () => new SongReader());
-            AddTypeCreator(typeof(SoundEffectReader).FullName, () => new SoundEffectReader());
-            AddTypeCreator(typeof(SpriteFontReader).FullName + ", " + _assemblyName, () => new SpriteFontReader());
-            AddTypeCreator(typeof(StringReader).FullName, () => new StringReader());
-            AddTypeCreator(typeof(Texture2DReader).FullName, () => new Texture2DReader());
-            AddTypeCreator(typeof(Texture3DReader).FullName, () => new Texture3DReader());
-            AddTypeCreator(typeof(TextureCubeReader).FullName, () => new TextureCubeReader());
-            AddTypeCreator(typeof(TextureReader).FullName, () => new TextureReader());
-            AddTypeCreator(typeof(TimeSpanReader).FullName, () => new TimeSpanReader());
-            AddTypeCreator(typeof(UInt16Reader).FullName, () => new UInt16Reader());
-            AddTypeCreator(typeof(UInt32Reader).FullName, () => new UInt32Reader());
-            AddTypeCreator(typeof(UInt64Reader).FullName, () => new UInt64Reader());
-            AddTypeCreator(typeof(Vector2Reader).FullName, () => new Vector2Reader());
-            AddTypeCreator(typeof(Vector3Reader).FullName, () => new Vector3Reader());
-            AddTypeCreator(typeof(Vector4Reader).FullName, () => new Vector4Reader());
-            AddTypeCreator(typeof(VertexBufferReader).FullName, () => new VertexBufferReader());
-            AddTypeCreator(typeof(VertexDeclarationReader).FullName, () => new VertexDeclarationReader());
-            AddTypeCreator(typeof(VideoReader).FullName, () =>  new VideoReader());
+            RegisterBuiltIn(() => new SByteReader());
+            RegisterBuiltIn(() => new SingleReader());
+            RegisterBuiltIn(() => new SkinnedEffectReader());
+            RegisterBuiltIn(() => new SongReader());
+            RegisterBuiltIn(() => new SoundEffectReader());
+            RegisterBuiltIn(() => new SpriteFontReader());
+            RegisterBuiltIn(() => new StringReader());
+            RegisterBuiltIn(() => new Texture2DReader());
+            RegisterBuiltIn(() => new Texture3DReader());
+            RegisterBuiltIn(() => new TextureCubeReader());
+            RegisterBuiltIn(() => new TextureReader());
+            RegisterBuiltIn(() => new TimeSpanReader());
+            RegisterBuiltIn(() => new UInt16Reader());
+            RegisterBuiltIn(() => new UInt32Reader());
+            RegisterBuiltIn(() => new UInt64Reader());
+            RegisterBuiltIn(() => new Vector2Reader());
+            RegisterBuiltIn(() => new Vector3Reader());
+            RegisterBuiltIn(() => new Vector4Reader());
+            RegisterBuiltIn(() => new VertexBufferReader());
+            RegisterBuiltIn(() => new VertexDeclarationReader());
+            RegisterBuiltIn(() => new VideoReader());
         }
 
         /// <summary>
@@ -143,82 +140,25 @@ namespace Microsoft.Xna.Framework.Content
             var needsInitialize = new BitArray(numberOfReaders);
             _contentReaders = new Dictionary<Type, ContentTypeReader>(numberOfReaders);
 
-            // Lock until we're done allocating and initializing any new
-            // content type readers...  this ensures we can load content
-            // from multiple threads and still cache the readers.
+            // Keep reader creation and initialization serialized across concurrent loads.
             lock (_locker)
             {
                 // For each reader in the file, we read out the length of the string which contains the type of the reader,
-                // then we read out the string. Finally we instantiate an instance of that reader using reflection
+                // then we read out the string and instantiate the reader through its registered factory.
                 for (var i = 0; i < numberOfReaders; i++)
                 {
                     // This string tells us what reader we need to decode the following data
                     string originalReaderTypeString = reader.ReadString();
 
                     Func<ContentTypeReader> readerFunc;
-                    if (typeCreators.TryGetValue(originalReaderTypeString, out readerFunc))
+                    if (!TryGetCreator(originalReaderTypeString, out readerFunc))
                     {
-                        contentReaders[i] = readerFunc();
-                        needsInitialize[i] = true;
+                        throw new ContentLoadException("No registered XNB content reader: " + originalReaderTypeString
+                            + ". Register the reader with ContentTypeReaderManager.AddTypeCreator before loading this asset.");
                     }
-                    else
-                    {
-                        // Need to resolve namespace differences
-                        string readerTypeString = originalReaderTypeString;
 
-                        readerTypeString = PrepareType(readerTypeString);
-
-                        Type l_readerType = null;
-                        try
-                        {
-                            // This might fail in AOT context and we need to properly warn the user on what to do if it happens
-#pragma warning disable IL2057
-                            l_readerType = Type.GetType(readerTypeString);
-#pragma warning restore IL2057
-                        }
-                        catch (NotSupportedException)
-                        {
-                            // This will not trigger on recent NativeAOT versions, it will crash later on GetDefaultConstructor() with a native access violation
-                            // but we keep this catch block for backward compatibility with older NativeAOT
-                            throw new NotSupportedException("It seems that you are using PublishAot and trying to load assets with a reflection-based serializer (which is not natively supported). To work around this error, call ContentTypeReaderManager.AddTypeCreator() in your Game constructor with the following type: " + originalReaderTypeString);
-                        }
-
-                        if (l_readerType != null)
-                        {
-                            ContentTypeReader typeReader;
-                            if (!_contentReadersCache.TryGetValue(l_readerType, out typeReader))
-                            {
-                                try
-                                {
-                                    typeReader = l_readerType.GetDefaultConstructor().Invoke(null) as ContentTypeReader;
-                                }
-                                catch (TargetInvocationException ex)
-                                {
-                                    // If you are getting here, the Mono runtime is most likely not able to JIT the type.
-                                    // In particular, MonoTouch needs help instantiating types that are only defined in strings in Xnb files.
-                                    throw new InvalidOperationException(
-                                        "Failed to get default constructor for ContentTypeReader. To work around, add a creation function to ContentTypeReaderManager.AddTypeCreator() " +
-                                        "with the following failed type string: " + originalReaderTypeString, ex);
-                                }
-                                // Catching non-CLS compliant exceptions to catch native exceptions like Access Violations on NativeAOT
-                                catch
-                                {
-                                    throw new NotSupportedException("It seems that you are using PublishAot and trying to load assets with a reflection-based serializer (which is not natively supported). To work around this error, call ContentTypeReaderManager.AddTypeCreator() in your Game constructor with the following type: " + originalReaderTypeString);
-                                }
-
-                                needsInitialize[i] = true;
-
-                                _contentReadersCache.Add(l_readerType, typeReader);
-                            }
-
-                            contentReaders[i] = typeReader;
-                        }
-                        else
-                            throw new ContentLoadException(
-                                    "Could not find ContentTypeReader Type. Please ensure the name of the Assembly that contains the Type matches the assembly in the full type name: " +
-                                    originalReaderTypeString + " (" + readerTypeString + "). " +
-                                    " If you are using trimming, PublishAOT, or targeting mobile platforms, you should call ContentTypeReaderManager.AddTypeCreator() on that reader type somewhere in your code.");
-                    }
+                    contentReaders[i] = readerFunc();
+                    needsInitialize[i] = true;
 
                     var targetType = contentReaders[i].TargetType;
                     if (targetType != null)
@@ -278,7 +218,36 @@ namespace Microsoft.Xna.Framework.Content
             return preparedType;
         }
 
-        // Static map of type names to creation functions. Required as iOS requires all types at compile time
+        // Match the registered built-ins across XNB assembly versions and the XNA/MonoGame core-library aliases.
+        private static string CanonicalReaderName(string name)
+        {
+            return Regex.Replace(PrepareType(name), @",\s*(Version|Culture|PublicKeyToken)=[^,\]]+", string.Empty);
+        }
+
+        private static void RegisterBuiltIn<T>(Func<T> create) where T : ContentTypeReader
+        {
+            Func<ContentTypeReader> factory = () => create();
+            BuiltInCreators.Add(CanonicalReaderName(typeof(T).FullName), factory);
+            BuiltInCreators.Add(CanonicalReaderName(typeof(T).AssemblyQualifiedName), factory);
+        }
+
+        private static bool TryGetCreator(string name, out Func<ContentTypeReader> create)
+        {
+            return typeCreators.TryGetValue(name, out create) || BuiltInCreators.TryGetValue(CanonicalReaderName(name), out create);
+        }
+
+        /// <summary>Tests whether the XNB reader name has an explicit factory.</summary>
+        /// <param name="typeString">The name stored in the XNB reader table.</param>
+        /// <returns>True when a reader factory is available.</returns>
+        public static bool HasTypeCreator(string typeString)
+        {
+            lock (_locker)
+            {
+                return TryGetCreator(typeString, out _);
+            }
+        }
+
+        // Custom readers use their exact XNB names and an explicit factory.
         private static Dictionary<string, Func<ContentTypeReader>> typeCreators = new Dictionary<string, Func<ContentTypeReader>>();
 
         /// <summary>
@@ -296,7 +265,7 @@ namespace Microsoft.Xna.Framework.Content
         }
 
         /// <summary>
-        /// Clears all content type creators that were registered with <see cref="AddTypeCreator(string, Func{ContentTypeReader})"/>
+        /// Clears custom content type creators that were registered with <see cref="AddTypeCreator(string, Func{ContentTypeReader})"/>
         /// </summary>
         public static void ClearTypeCreators()
         {

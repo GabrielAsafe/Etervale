@@ -4,6 +4,9 @@
 client collision queries, the HDR renderer (scene, lighting, shadows, sky, post chain) and its diagnostics. Shader
 sources are in [shaders.md](shaders.md); option fields in [client-settings.md](client-settings.md).
 
+The client uses the pinned SharpGLTF.Core source in `ThirdParty/SharpGLTF.Core` for glTF models. Its unknown-extension
+JSON uses the DOM's parser directly, without rooting unrelated reflection-based JSON APIs. See that directory's README.
+
 ## Read this when
 
 - Changing pass order, a render target, the light model, exposure, shadows, fog, IBL, SSR, volumetric light or AA.

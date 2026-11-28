@@ -15,6 +15,10 @@ The client projects (`Client/PristonTale`, `Client/PristonTale.Engine3D`, `Clien
 
 MonoGame's licence (MS-PL) is `../LICENSE-MonoGame.txt`.
 
+XNB content readers use explicit built-in factories, including compatible assembly-qualified XNA and MonoGame names.
+Custom content readers must be registered with `ContentTypeReaderManager.AddTypeCreator` before loading their XNBs;
+unknown readers fail explicitly rather than invoking reflection. Clearing custom factories leaves built-ins available.
+
 ## How it was obtained (pinned)
 
 1. `git clone --depth 1 --branch v3.8.6 https://github.com/MonoGame/MonoGame.git` (tag commit
