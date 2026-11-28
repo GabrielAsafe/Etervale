@@ -44,12 +44,77 @@ internal static class ClassSkillDataTests
 
     public static IEnumerable<(string, Func<Task>)> Cases()
     {
+        yield return ("apk68: generated class rules match all embedded reflection contracts", GeneratedRulesAsync);
         yield return ("class skill data keeps the original codes, window order, levels, mouse sides, weapons and ten-rank costs", MetadataAsync);
         yield return ("Martial Artist skill buttons use its own asset family", MartialArtistIconsAsync);
         yield return ("every skill of the ported classes has ten-rank costs and a complete rule on every rank", PortedRulesAsync);
         yield return ("class skill files reject unknown properties and brood names at any depth", StrictDataAsync);
         yield return ("the Assassin's skills keep the original hit frames, areas, party reach and dagger rules", AssassinAsync);
         yield return ("the Shaman's spells scale by rank, Haunt drains, Soul Manacle spares bosses and Mourning needs a companion", ShamanAsync);
+    }
+
+    private static Task GeneratedRulesAsync()
+    {
+        var assembly = typeof(ClassSkillCatalog).Assembly;
+        var options = SkillRuleCatalog.JsonOptions;
+        var count = 0;
+        foreach (var name in assembly.GetManifestResourceNames().Where(static n => n.StartsWith("PristonTale.Simulation.Skills.Data.Classes.", StringComparison.Ordinal)))
+        {
+            using var stream = assembly.GetManifestResourceStream(name)!;
+            using var reader = new StreamReader(stream);
+            var json = reader.ReadToEnd();
+            using var document = JsonDocument.Parse(json, new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
+            var skills = ClassSkillCatalog.Parse(json, out var rules);
+            var index = 0;
+            var ruleIndex = 0;
+            foreach (var element in document.RootElement.EnumerateArray())
+            {
+                var entry = element.Deserialize<ClassSkillEntry>(options)!;
+                var actual = skills[index++];
+                Assert.True(actual.Code == entry.Code && actual.Name == entry.Name && actual.Description == entry.Description && actual.IconKey == entry.Icon
+                    && actual.Tier == entry.Tier && actual.Category == entry.Category && actual.RequiredLevel == entry.RequiredLevel && actual.MouseUse == entry.Mouse
+                    && actual.ManaByRank.SequenceEqual(entry.Mana) && actual.StaminaBase == (entry.Stamina.Length > 0 ? entry.Stamina[0] : 0)
+                    && actual.StaminaPerRank == (entry.Stamina.Length > 1 ? entry.Stamina[1] : 0), $"Generated skill entry differs: {entry.Code:X8}");
+                if (entry.Kind is not null)
+                {
+                    var expectedRule = element.Deserialize<SkillRule>(options)!;
+                    var actualRule = rules[ruleIndex++];
+                    var expected = JsonSerializer.SerializeToNode(expectedRule, options);
+                    var generated = JsonSerializer.SerializeToNode(actualRule, options);
+                    RemoveComputedShares(expected);
+                    RemoveComputedShares(generated);
+                    Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(expected, generated), $"Generated skill rule differs: {entry.Code:X8}");
+                }
+
+                count++;
+            }
+
+            Assert.True(index == skills.Count && ruleIndex == rules.Count, "Generated class counts differ");
+        }
+
+        Assert.True(count > 0, "No embedded skills compared");
+        Console.WriteLine($"Compared {count} embedded skill entries against the reflection reader.");
+        return Task.CompletedTask;
+    }
+
+    private static void RemoveComputedShares(System.Text.Json.Nodes.JsonNode? node)
+    {
+        if (node is System.Text.Json.Nodes.JsonObject obj)
+        {
+            // The catalog assigns this runtime value after deserialization.
+            obj.Remove("orbShare");
+            foreach (var property in obj)
+            {
+                RemoveComputedShares(property.Value);
+            }
+        }
+        else if (node is System.Text.Json.Nodes.JsonArray array)
+        {
+            foreach (var item in array)
+            {
+                RemoveComputedShares(item);
+            }
+        }
     }
 
     private static Task AssassinAsync()

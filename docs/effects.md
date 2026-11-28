@@ -4,6 +4,9 @@ Particle and skill-effect runtime of the client: `Client/PristonTale.Effects/` (
 the effect data under `<assetRoot>/Effect/Vfx/`, the converter `tools/PristonTale.VfxImport` (`ptvfx`) that
 writes that data, and the gameplay glue in `Client/PristonTale.Gameplay/Effects/` that turns skill events into effects.
 
+The runtime reads VFX definitions through a source-generated JSON contract. Missing nested members inherit their
+typed defaults; explicit values, required names, enum names, comments and trailing commas keep the authored contract.
+
 ## Read this when
 
 - Adding or tuning the visual effect of a skill (cast, projectile, impact, aura, weapon band).

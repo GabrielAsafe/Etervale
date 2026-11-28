@@ -8,6 +8,7 @@ internal static class VfxLayerTests
 {
     public static IEnumerable<(string, Func<Task>)> Cases()
     {
+        yield return ("apk68: generated VFX reader preserves nested defaults and explicit values", GeneratedVfxAsync);
         yield return ("component layers keep the original keyed-event, loop and delay rules", ComponentsAsync);
         yield return ("component particle pools respect their count, loops and the 100-particle cap", ComponentParticlesAsync);
         yield return ("sequence layers emit their budget, loop on clock events and stop on request", SequencesAsync);
@@ -20,6 +21,34 @@ internal static class VfxLayerTests
         yield return ("spiral parts follow their straight path turned by the swirl, settle at their move time and fade", PartSpiralAsync);
         yield return ("a handle reaches only its own effect once the pooled instance runs another", HandleAsync);
         yield return ("a part's degree angles turn it about X, then Y, then Z", RotationAsync);
+    }
+
+    private static Task GeneratedVfxAsync()
+    {
+        const string json = """
+            [{ "name": "test.sparse", "emitters": [{"texture": "builtin:glow", "softness": 0}],
+               "trails": [{"texture": "builtin:beam"}], "lights": [{}], "sounds": [{"path": "x.wav"}],
+               "children": [{"effect": "test.other", "stopWithParent": false}],
+               "components": [{"texture": "x.tga"}], "sequences": [{"texture": "x.tga", "events": [{}]}],
+               "parts": [{"texture": "x.tga", "sized": false, "turn": false}] }]
+            """;
+        var expected = System.Text.Json.JsonSerializer.Deserialize<VfxDefinition[]>(json, VfxDefinition.Json);
+        var generated = VfxDefinition.ParseFile(json);
+        Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(
+            System.Text.Json.JsonSerializer.SerializeToNode(expected, VfxDefinition.Json),
+            System.Text.Json.JsonSerializer.SerializeToNode(generated, VfxDefinition.Json)), "Generated VFX differs from the reflection contract");
+        Assert.True(generated[0].Emitters[0].FrameColumns == 1 && generated[0].Emitters[0].Softness == 0
+            && !generated[0].Parts[0].Sized && !generated[0].Parts[0].Turn, "VFX defaults or explicit values changed");
+        try
+        {
+            VfxDefinition.ParseFile("[{}]");
+            throw new InvalidOperationException("Missing required effect name was accepted");
+        }
+        catch (System.Text.Json.JsonException)
+        {
+        }
+
+        return Task.CompletedTask;
     }
 
     private static Task RotationAsync()

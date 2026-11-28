@@ -5,6 +5,9 @@ a skill master, server-side cast resolution (`Shared/PristonTale.Application/Wor
 status extension messages, and the client skill window, mouse sockets, cast flow, buff bar and skill VFX hooks.
 Monster skills are a separate system (see [world.md](world.md)); they share only the status-effect engine and messages.
 
+The runtime catalog uses source-generated JSON metadata for both class entries and skill rules. Missing members,
+including nested rule members, inherit typed defaults. Hex codes and recursive unknown-property checks are preserved.
+
 ## Read this when
 
 - Changing a number of a class skill (damage, cost, cooldown, duration, range, area, motion, effect name).

@@ -7,8 +7,31 @@ namespace PristonTale.Tests;
 
 internal static class MobileHudLayoutTests
 {
+    private static Task GeneratedManifestAsync()
+    {
+        const string json = """
+            {"Version":1,"Textures":["atlas.png"],"Regions":{"test":{"Texture":0,"X":1,"Y":2,"Width":3,"Height":4,"Border":0}},"MagentaKeyTextures":[],"Gauges":{}}
+            """;
+        var manifest = PristonTale.Gameplay.UI.Rendering.HudAtlas.ParseManifest(System.Text.Encoding.UTF8.GetBytes(json));
+        Assert.True(manifest.Version == 1 && manifest.Regions["test"].Bounds == new Rectangle(1, 2, 3, 4), "HUD manifest changed");
+        foreach (var invalid in new[] { json.Replace("\"Version\":1,", ""), json.Replace("\"Version\":1", "\"Version\":1,\"Unknown\":true") })
+        {
+            try
+            {
+                PristonTale.Gameplay.UI.Rendering.HudAtlas.ParseManifest(System.Text.Encoding.UTF8.GetBytes(invalid));
+                throw new InvalidOperationException("Invalid HUD manifest was accepted");
+            }
+            catch (System.Text.Json.JsonException)
+            {
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
     public static IEnumerable<(string Name, Func<Task> Run)> Cases()
     {
+        yield return ("apk68: HUD atlas generated manifest keeps required and unknown field checks", GeneratedManifestAsync);
         yield return Case("mobile HUD: MobileLayoutFitsAndPointerUsesSameScale (1280, 720)", static () => MobileLayoutFitsAndPointerUsesSameScale(1280, 720));
         yield return Case("mobile HUD: MobileLayoutFitsAndPointerUsesSameScale (1920, 1080)", static () => MobileLayoutFitsAndPointerUsesSameScale(1920, 1080));
         yield return Case("mobile HUD: MobileLayoutFitsAndPointerUsesSameScale (2400, 1080)", static () => MobileLayoutFitsAndPointerUsesSameScale(2400, 1080));

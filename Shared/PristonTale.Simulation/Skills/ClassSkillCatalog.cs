@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
+using PristonTale.Contracts.Serialization;
 using PristonTale.Simulation.World.Monsters;
 using PristonTale.Simulation.Characters;
 using PristonTale.Simulation.Items;
@@ -62,12 +63,12 @@ public static class ClassSkillCatalog
         foreach (var element in document.RootElement.EnumerateArray())
         {
             SkillJson.RequireKnownProperties(element, EntryTypes, element.TryGetProperty("name", out var name) ? name.ToString() : "skill");
-            var entry = element.Deserialize<ClassSkillEntry>(SkillJson.Options)
+            var entry = SkillJson.Defaults.Deserialize(element, SkillRuntimeJsonContext.Default.ClassSkillEntry)
                 ?? throw new InvalidDataException("A class skill entry is empty.");
             skills.Add(ToSkill(entry));
             if (entry.Kind is not null)
             {
-                var rule = element.Deserialize<SkillRule>(SkillJson.Options);
+                var rule = SkillJson.Defaults.Deserialize(element, SkillRuntimeJsonContext.Default.SkillRule);
                 SkillRuleCatalog.Validate(rule);
                 SkillRuleCatalog.ShareForceOrbs(rule, entry.Tier);
                 parsedRules.Add(rule);
@@ -165,14 +166,30 @@ public static class ClassSkillCatalog
 // The serializer settings of the skill data files: camel-case names, string enums and hex skill codes.
 internal static class SkillJson
 {
-    public static JsonSerializerOptions Options { get; } = new()
+    // The desktop data tools retain their open-ended serializer. The runtime catalog uses only generated contracts.
+    public static JsonSerializerOptions Options => ToolJson.Options;
+
+    private static class ToolJson
     {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        ReadCommentHandling = JsonCommentHandling.Skip,
-        AllowTrailingCommas = true,
-        Converters = { new JsonStringEnumConverter(), new HexCodeConverter() },
-        TypeInfoResolver = new DefaultJsonTypeInfoResolver()
-    };
+        internal static readonly JsonSerializerOptions Options = new()
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            ReadCommentHandling = JsonCommentHandling.Skip,
+            AllowTrailingCommas = true,
+            Converters = { new JsonStringEnumConverter(), new HexCodeConverter() },
+            TypeInfoResolver = new DefaultJsonTypeInfoResolver()
+        };
+    }
+
+    internal static readonly GeneratedJsonDefaults Defaults = new(SkillRuntimeJsonContext.Default,
+        new ClassSkillEntry(), new SkillRule(), new SkillModifierRule(),
+        new SkillBuffRule(), new SkillPeriodicRule(), new SkillDamageRule(),
+        new SkillPassiveRule(), new SkillSummonRule(), new SkillBorrowedCritical(),
+        new SkillBorrowedRating(), new SkillBurstRule(), new SkillChargeRule(),
+        new SkillCompanionRule(), new SkillCounterRule(), new SkillMotionVariant(),
+        new SkillAllyRule(), new SkillEnchantChoice(), new SkillEnchantRule(),
+        new SkillAbsorbRule(), new SkillReflectRule(), new SkillGuardRule(),
+        new SkillPulseRule(), new SkillCharmRule(), new SkillResurrectRule());
 
     // The serializer skips unknown properties, so a misspelled name would silently drop its value. Every property of a
     // skill object, at any depth, must belong to one of the types it is read into; brood lists must name MonsterBrood
@@ -184,7 +201,7 @@ internal static class SkillJson
             return;
         }
 
-        var infos = types.Select(type => Options.GetTypeInfo(type)).Where(static info => info.Kind == JsonTypeInfoKind.Object).ToArray();
+        var infos = types.Select(type => SkillRuntimeJsonContext.Default.Options.GetTypeInfo(type)).Where(static info => info.Kind == JsonTypeInfoKind.Object).ToArray();
         if (infos.Length == 0)
         {
             return;
@@ -258,7 +275,7 @@ internal static class SkillJson
     }
 
     // Skill codes are written as hex strings ("0x01010001") in the data files.
-    private sealed class HexCodeConverter : JsonConverter<uint>
+    internal sealed class HexCodeConverter : JsonConverter<uint>
     {
         public override uint Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
@@ -275,4 +292,13 @@ internal static class SkillJson
 
         public override void Write(Utf8JsonWriter writer, uint value, JsonSerializerOptions options) => writer.WriteStringValue($"0x{value:X8}");
     }
+}
+
+[JsonSourceGenerationOptions(GenerationMode = JsonSourceGenerationMode.Metadata, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    UseStringEnumConverter = true, ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true,
+    Converters = new[] { typeof(SkillJson.HexCodeConverter) })]
+[JsonSerializable(typeof(ClassSkillEntry))]
+[JsonSerializable(typeof(SkillRule))]
+internal sealed partial class SkillRuntimeJsonContext : JsonSerializerContext
+{
 }

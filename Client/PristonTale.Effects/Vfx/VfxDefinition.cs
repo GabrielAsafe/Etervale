@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Xna.Framework;
+using PristonTale.Contracts.Serialization;
 
 namespace PristonTale.Effects.Vfx;
 
@@ -179,9 +180,18 @@ public sealed record VfxDefinition
         WriteIndented = true
     };
 
+    private static class RuntimeJson
+    {
+        internal static readonly GeneratedJsonDefaults Defaults = new(VfxRuntimeJsonContext.Default,
+            new VfxDefinition { Name = "" }, new VfxEmitterDefinition(), new VfxTrailDefinition(), new VfxLightDefinition(),
+            new VfxSoundDefinition(), new VfxChildDefinition(), new VfxComponentDefinition(), new VfxSequenceDefinition(),
+            new VfxSequenceEvent(), new VfxPartDefinition());
+    }
+
     public static VfxDefinition[] ParseFile(string json)
     {
-        var definitions = JsonSerializer.Deserialize<VfxDefinition[]>(json, Json) ?? [];
+        using var document = JsonDocument.Parse(json, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+        var definitions = RuntimeJson.Defaults.Deserialize(document.RootElement, VfxRuntimeJsonContext.Default.VfxDefinitionArray) ?? [];
         foreach (var definition in definitions)
         {
             definition.Validate();
@@ -336,4 +346,11 @@ public sealed record VfxDefinition
     }
 
     internal static Vector3 Vec3(float[] value) => new(value[0], value[1], value[2]);
+}
+
+[JsonSourceGenerationOptions(GenerationMode = JsonSourceGenerationMode.Metadata, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    UseStringEnumConverter = true, ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true)]
+[JsonSerializable(typeof(VfxDefinition[]))]
+internal sealed partial class VfxRuntimeJsonContext : JsonSerializerContext
+{
 }

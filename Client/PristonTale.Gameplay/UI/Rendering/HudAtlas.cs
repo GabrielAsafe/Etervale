@@ -132,16 +132,12 @@ public sealed class HudAtlas : IDisposable
         }
     }
 
+    internal static HudAtlasManifest ParseManifest(byte[] bytes) => JsonSerializer.Deserialize(bytes, HudAtlasJsonContext.Default.HudAtlasManifest);
+
     private static Prepared Prepare(string assetRoot)
     {
         var root = Path.Combine(assetRoot, "Hud");
-        var options = new JsonSerializerOptions
-        {
-            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-            RespectRequiredConstructorParameters = true
-        };
-        var manifest = JsonSerializer.Deserialize<HudAtlasManifest>(
-            AssetFiles.ReadAllBytes(Path.Combine(root, "Manifests", "atlas.json")), options);
+        var manifest = ParseManifest(AssetFiles.ReadAllBytes(Path.Combine(root, "Manifests", "atlas.json")));
         if (manifest is null || manifest.Version != 1 || manifest.Textures is null
             || manifest.Textures.Length is < 1 or > 4 || manifest.Regions is null || manifest.MagentaKeyTextures is null
             || manifest.Gauges is null || manifest.Gauges.Count > 4)
@@ -250,4 +246,11 @@ public sealed class HudAtlas : IDisposable
         _prepared = null;
         _preparation = null;
     }
+}
+
+[JsonSourceGenerationOptions(GenerationMode = JsonSourceGenerationMode.Metadata,
+    UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow, RespectRequiredConstructorParameters = true)]
+[JsonSerializable(typeof(HudAtlasManifest))]
+internal sealed partial class HudAtlasJsonContext : JsonSerializerContext
+{
 }

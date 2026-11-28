@@ -4,6 +4,9 @@ The game client: the executable (`Client/PristonTale`), the screen layer, game s
 (`Client/PristonTale.Gameplay`) and the client side of the protocol (`Client/PristonTale.Client.Net`). Shaders,
 rendering internals, skill presentation and VFX data have their own documents (see Related).
 
+The HUD atlas manifest is read through source-generated JSON metadata with required constructor fields and strict
+unknown-field validation.
+
 ## Read this when
 
 - You add or change a screen, a HUD window, a key binding or a mouse interaction.

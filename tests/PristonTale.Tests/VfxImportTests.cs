@@ -73,7 +73,13 @@ internal static class VfxImportTests
         Assert.True(files.Length > 0, "no authored definitions");
         foreach (var file in files)
         {
-            foreach (var definition in VfxDefinition.ParseFile(File.ReadAllText(file)))
+            var json = File.ReadAllText(file);
+            var generated = VfxDefinition.ParseFile(json);
+            var expected = System.Text.Json.JsonSerializer.Deserialize<VfxDefinition[]>(json, VfxDefinition.Json);
+            Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(
+                System.Text.Json.JsonSerializer.SerializeToNode(expected, VfxDefinition.Json),
+                System.Text.Json.JsonSerializer.SerializeToNode(generated, VfxDefinition.Json)), "Generated VFX differs in " + Path.GetFileName(file));
+            foreach (var definition in generated)
             {
                 definition.Validate();
                 Assert.True(names.Add(definition.Name), $"{definition.Name} is defined twice");
