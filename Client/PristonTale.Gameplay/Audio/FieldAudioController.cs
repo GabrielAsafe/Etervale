@@ -374,6 +374,24 @@ public sealed class FieldAudioController : IDisposable
         _fieldAmbientCode = -1;
     }
 
+    internal static (int Code, float Volume) SelectPositionalAmbient(IReadOnlyList<FieldAmbient> ambients, Vector3 listenerPosition)
+    {
+        var bestCode = -1;
+        var bestVolume = 0f;
+        for (var index = 0; index < ambients.Count; index++)
+        {
+            var ambient = ambients[index];
+            var volume = ProximityVolume(listenerPosition, ambient);
+            if (volume > bestVolume)
+            {
+                bestCode = ambient.SoundCode;
+                bestVolume = volume;
+            }
+        }
+
+        return (bestCode, bestVolume);
+    }
+
     private void UpdatePositionalAmbience(Vector3 listenerPosition, float seconds)
     {
         if (!_library.SoundEnabled)
@@ -382,17 +400,7 @@ public sealed class FieldAudioController : IDisposable
             return;
         }
 
-        var bestCode = -1;
-        var bestVolume = 0f;
-        foreach (var ambient in _ambients)
-        {
-            var volume = ProximityVolume(listenerPosition, ambient);
-            if (volume > bestVolume)
-            {
-                bestCode = ambient.SoundCode;
-                bestVolume = volume;
-            }
-        }
+        var (bestCode, bestVolume) = SelectPositionalAmbient(_ambients, listenerPosition);
 
         if (bestCode >= 0 && bestCode != _positionalAmbientCode)
         {

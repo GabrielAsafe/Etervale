@@ -427,8 +427,11 @@ public sealed partial class GameScene : IDisposable, IHudPortraitScene
     private const float WarpCorrection = 200f;
     private float _pendingWarpDelay;
 
+    internal (long Early, long Presence, long Skills, long Input, long Streaming, long Camera, long Renderer, long Report) UpdateAllocLast { get; private set; }
+
     public void Update(GameTime gameTime)
     {
+        var allocated = GC.GetAllocatedBytesForCurrentThread();
         _npcAudio?.Update();
         if (_equipmentPresentation?.Update(Owner, _activeField?.Definition.State == FieldState.Village, PlayerWorld(), _playerController.Current) == true)
         {
@@ -454,15 +457,30 @@ public sealed partial class GameScene : IDisposable, IHudPortraitScene
         }
         UpdateModernForest();
         _skillClockMs = gameTime.TotalGameTime.TotalMilliseconds;
+        var next = GC.GetAllocatedBytesForCurrentThread();
+        var early = next - allocated;
+        allocated = next;
         DrainPresence(frameDt);
+        next = GC.GetAllocatedBytesForCurrentThread();
+        var presence = next - allocated;
+        allocated = next;
         KeepOnFloor(frameDt);
         UpdateSkills(gameTime);
         UpdateItemEffects(frameDt);
         ApplyPositionCorrection(frameDt);
+        next = GC.GetAllocatedBytesForCurrentThread();
+        var skills = next - allocated;
+        allocated = next;
         UpdatePlayerInput(gameTime);
         UpdateTargetSelection(gameTime);
+        next = GC.GetAllocatedBytesForCurrentThread();
+        var input = next - allocated;
+        allocated = next;
         UpdateWarps((float)gameTime.ElapsedGameTime.TotalSeconds);
         UpdateStreaming();
+        next = GC.GetAllocatedBytesForCurrentThread();
+        var streaming = next - allocated;
+        allocated = next;
         if (_camera != null && _activeField != null)
         {
             if (OperatingSystem.IsAndroid() && CameraInputEnabled && !MovementLocked && !KeyboardCaptured)
@@ -473,14 +491,22 @@ public sealed partial class GameScene : IDisposable, IHudPortraitScene
             UpdateCamera(gameTime);
         }
 
+        next = GC.GetAllocatedBytesForCurrentThread();
+        var camera = next - allocated;
+        allocated = next;
         if (_renderer != null)
         {
             FollowServerClock();
             _renderer.Update(gameTime);
         }
 
+        next = GC.GetAllocatedBytesForCurrentThread();
+        var renderer = next - allocated;
+        allocated = next;
         var dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
         UpdateMovementReport(dt);
+        var report = GC.GetAllocatedBytesForCurrentThread() - allocated;
+        UpdateAllocLast = (early, presence, skills, input, streaming, camera, renderer, report);
     }
 
     private void OnNpcMotionStarted(int soundCode, MotionCode motion, Vector3 sourcePosition)

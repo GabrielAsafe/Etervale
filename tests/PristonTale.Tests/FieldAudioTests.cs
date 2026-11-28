@@ -15,6 +15,7 @@ internal static class FieldAudioTests
     {
         yield return ("original JODO ambience is normalized without changing RIFF audio", WaveHeaderAsync);
         yield return ("field ambience uses the original radius and distance volume curve", ProximityVolumeAsync);
+        yield return ("scene allocations: positional ambience preserves selection without enumeration", PositionalSelectionAsync);
         yield return ("continuous field ambience follows original state code and day night rules", FieldAmbientSelectionAsync);
         yield return ("field catalogue preserves all 72 authored positional ambience sources", FieldCatalogueAsync);
         yield return ("Ricarten cart and windmill ambience preserve their authored sources", RicartenMachineryAmbienceAsync);
@@ -145,6 +146,32 @@ internal static class FieldAudioTests
         AssertInvalid(() => PristonWaveDecoder.NormalizeHeader(CreateWaveHeader("NOPE")));
         AssertInvalid(() => PristonWaveDecoder.NormalizeHeader(CreateWaveHeader("RIFF", 5)));
         AssertInvalid(() => PristonWaveDecoder.NormalizeHeader(new byte[11]));
+        return Task.CompletedTask;
+    }
+
+    private static Task PositionalSelectionAsync()
+    {
+        var source = new FieldVector(10, 20, -30);
+        var listener = new Vector3(10, 20, 30);
+        IReadOnlyList<FieldAmbient> ambients = new List<FieldAmbient> { new(source, 20, 7), new(source, 20, 8) };
+        var expected = (7, FieldAudioController.ProximityVolume(listener, ambients[0]));
+        Assert.True(FieldAudioController.SelectPositionalAmbient(ambients, listener) == expected, "equal volume did not keep first source");
+        Assert.True(FieldAudioController.SelectPositionalAmbient(ambients, listener + new Vector3(10000, 0, 0)) == (-1, 0f), "out of range source selected");
+        Assert.True(FieldAudioController.SelectPositionalAmbient([], listener) == (-1, 0f), "empty field selected a source");
+        for (var index = 0; index < 1000; index++)
+        {
+            _ = FieldAudioController.SelectPositionalAmbient(ambients, listener);
+        }
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var correct = true;
+        for (var index = 0; index < 1000; index++)
+        {
+            correct &= FieldAudioController.SelectPositionalAmbient(ambients, listener) == expected;
+        }
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(correct && allocated == 0, $"positional ambience selection allocated {allocated} bytes or changed its result");
         return Task.CompletedTask;
     }
 

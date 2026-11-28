@@ -33,8 +33,9 @@ public sealed partial class GameScene
 {
     private static bool TryGateSeam(FieldDef a, FieldDef b, out Vector2 seam)
     {
-        foreach (var gate in a.Gates)
+        for (var index = 0; index < a.Gates.Count; index++)
         {
+            var gate = a.Gates[index];
             if (gate.DestinationFieldId == b.Id)
             {
                 seam = GatePlanar(gate);
@@ -42,8 +43,9 @@ public sealed partial class GameScene
             }
         }
 
-        foreach (var gate in b.Gates)
+        for (var index = 0; index < b.Gates.Count; index++)
         {
+            var gate = b.Gates[index];
             if (gate.DestinationFieldId == a.Id)
             {
                 seam = GatePlanar(gate);
@@ -107,8 +109,9 @@ public sealed partial class GameScene
             return;
         }
 
-        foreach (var warp in _activeField.Definition.WarpGates)
+        for (var index = 0; index < _activeField.Definition.WarpGates.Count; index++)
         {
+            var warp = _activeField.Definition.WarpGates[index];
             if (WingGates.IsStone(warp) || warp.DestinationFieldId == _activeField.Definition.Id)
             {
                 continue;

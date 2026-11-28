@@ -62,6 +62,9 @@ public sealed class GameplayScreen : GameScreen
         var update = _updateAllocLast;
         MobileDiagnosticTrace.WritePerformance($"Update allocation last bytes | prepare={update.Prepare} mobile={update.Mobile} hud={update.Hud}"
             + $" bridge={update.Bridge} scene={update.Scene} tail={update.Tail}");
+        var scene = _scene.UpdateAllocLast;
+        MobileDiagnosticTrace.WritePerformance($"Scene allocation last bytes | early={scene.Early} presence={scene.Presence} skills={scene.Skills} input={scene.Input}"
+            + $" streaming={scene.Streaming} camera={scene.Camera} renderer={scene.Renderer} report={scene.Report}");
         if (!profiler.GpuTimersAvailable)
         {
             MobileDiagnosticTrace.WritePerformance("GPU timers=unavailable");

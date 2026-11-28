@@ -50,8 +50,9 @@ public sealed partial class GameScene
         }
 
         FieldWarpGate standing = null;
-        foreach (var warp in _activeField.Definition.WarpGates)
+        for (var index = 0; index < _activeField.Definition.WarpGates.Count; index++)
         {
+            var warp = _activeField.Definition.WarpGates[index];
             if (WingGates.IsStone(warp) && OnGate(warp))
             {
                 standing = warp;

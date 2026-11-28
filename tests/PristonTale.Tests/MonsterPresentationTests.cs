@@ -19,6 +19,7 @@ internal static class MonsterPresentationTests
 {
     public static IEnumerable<(string, Func<Task>)> Cases()
     {
+        yield return ("scene allocations: monster presentation reuses frame traversal", FrameTraversalAsync);
         yield return ("monster effect families split by level and size as the original did", FamiliesAsync);
         yield return ("monster clips start their effects at clip start and at each event frame, keyed by the clip", TriggersAsync);
         yield return ("monster auras run while the monster lives and death effects play once", AuraAsync);
@@ -29,6 +30,34 @@ internal static class MonsterPresentationTests
             + "under status tints and corpse fades", LooksAsync);
         yield return ("a Babel blow splashing over several players lights a chain between them when its bolt arrives", BabelChainAsync);
         yield return ("authored monster effects use known families and cover every family the client draws", DataAsync);
+    }
+
+    private static Task FrameTraversalAsync()
+    {
+        var sink = new Sink("vfx.monster.figon.aura");
+        var scene = new Scene();
+        var presentation = new MonsterPresentation(sink, scene);
+        var view = new MonsterActorView(5, new ActorHandle(1, 1), 0x1180, 50, 1f, Vector3.Zero, 0f, false);
+        IReadOnlyList<MonsterActorView> views = new List<MonsterActorView> { view };
+        for (var index = 0; index < 1000; index++)
+        {
+            presentation.Update(views, 1f / 60f);
+        }
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < 1000; index++)
+        {
+            presentation.Update(views, 1f / 60f);
+        }
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated == 0, $"stable monster traversal allocated {allocated} bytes");
+        Assert.True(sink.Spawned.Count == 1, "stable aura restarted");
+        presentation.Update([], 1f / 60f);
+        Assert.True(sink.Stopped == 1, "departing monster did not stop its aura");
+        presentation.Update(views, 1f / 60f);
+        Assert.True(sink.Spawned.Count == 2, "returning monster did not restore its aura");
+        return Task.CompletedTask;
     }
 
     private static Task FamiliesAsync()

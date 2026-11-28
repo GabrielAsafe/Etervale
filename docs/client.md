@@ -157,6 +157,10 @@ keys, `GameScene.Update`, copy the scene's selected target back to the HUD.
 `GameScene.Update` order: NPC audio, equipment presentation, transient effects, field audio, one streaming upload step,
 `DrainPresence`, skills, `UpdatePlayerInput` (picking, prediction, NPC approach, loot, attack approach), hover target
 selection, warps, streaming scan, camera, renderer, movement report.
+Android's periodic `Scene allocation last bytes` line splits the last scene update into early work (audio, monster
+presentation and field publication), presence, floor and skill effects, player input and target selection, warps and
+streaming, camera, renderer, and movement reporting. It measures managed bytes on the game thread, not averages.
+Monster presentation and sound tracking, positional ambience, and gate scans traverse existing lists by index.
 
 `GameplayScreen.Draw` order: `GameplayHud.RenderPortrait` (must be first: it binds its own render target, which discards
 the back buffer), clear, `GameScene.Draw` (renderer, effects, `ComposeScene`), ground loot labels, floating combat text,
@@ -394,7 +398,9 @@ The client owns its own locomotion; the server validates and corrects.
 
 ## Field streaming
 
-The active field is the loaded field with the highest floor under the player. Every 8 frames `ScanStreaming` requests
+The active field is the loaded field with the highest floor under the player. The scene caches the ordered neighbour
+list for the current field definition and catalog, refreshing it when either changes; distance and residency decisions
+are still made on each scan. Every 8 frames `ScanStreaming` requests
 neighbours whose gate seam, or warp-gate destinations whose gate, is within 1024 units, or ahead of a move target
 within `PrefetchDistance(speed)` (1400 to 4500 units); fields beyond `RetentionDistance` (prefetch + 1200) unload, except a destination `PrepareField` asked for in
 the last 10 s. The streamer keeps at most one neighbour in flight (preparing or uploading). A destination requested by

@@ -26,8 +26,9 @@ public sealed class MonsterSoundCues(CombatSounds sounds, IMonsterScene scene)
     public void Update(IReadOnlyList<MonsterActorView> monsters, Vector3 listener)
     {
         _seen.Clear();
-        foreach (var monster in monsters)
+        for (var index = 0; index < monsters.Count; index++)
         {
+            var monster = monsters[index];
             _seen.Add(monster.EntityId);
             Step(monster, listener);
         }

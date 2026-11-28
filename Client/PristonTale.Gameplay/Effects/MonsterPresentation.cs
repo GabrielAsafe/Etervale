@@ -158,8 +158,9 @@ public sealed class MonsterPresentation
         _clock += seconds;
         LightChains();
         _seen.Clear();
-        foreach (var monster in monsters)
+        for (var index = 0; index < monsters.Count; index++)
         {
+            var monster = monsters[index];
             _seen.Add(monster.EntityId);
             Step(monster, seconds);
         }

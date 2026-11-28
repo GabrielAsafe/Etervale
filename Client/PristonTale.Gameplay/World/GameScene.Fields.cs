@@ -188,6 +188,8 @@ public sealed partial class GameScene
         ScanStreaming();
     }
 
+    private readonly FieldNeighbourCache _streamNeighbours = new();
+
     private void ScanStreaming()
     {
         var active = _activeField.Definition;
@@ -195,8 +197,10 @@ public sealed partial class GameScene
         Vector2? movementTarget = _hasMoveTarget ? _moveTarget : null;
         var movementSpeed = _hasMoveTarget ? MovementSpeed(_runMode) : 0f;
         var disconnect = FieldStreamingPolicy.RetentionDistance(movementSpeed);
-        foreach (var neighbour in _worldCatalog.Neighbours(active))
+        var neighbours = _streamNeighbours.Get(_worldCatalog, active);
+        for (var index = 0; index < neighbours.Count; index++)
         {
+            var neighbour = neighbours[index];
             if (IsLoaded(neighbour.Id))
             {
                 continue;
@@ -209,8 +213,9 @@ public sealed partial class GameScene
             }
         }
 
-        foreach (var warp in active.WarpGates)
+        for (var warpIndex = 0; warpIndex < active.WarpGates.Count; warpIndex++)
         {
+            var warp = active.WarpGates[warpIndex];
             var point = WorldSpace.Planar(warp.X, warp.Z);
             if (!WingGates.IsStone(warp)
                 && FieldStreamingPolicy.ShouldPrefetch(player, movementTarget, point, movementSpeed)
@@ -230,8 +235,9 @@ public sealed partial class GameScene
 
             var keep = TryGateSeam(active, field.Definition, out var seam) && Vector2.DistanceSquared(player, seam) < disconnect * disconnect
                 || field.Definition.Id == _preparedDestinationId && _skillClockMs < _preparedDestinationUntilMs;
-            foreach (var warp in active.WarpGates)
+            for (var warpIndex = 0; warpIndex < active.WarpGates.Count; warpIndex++)
             {
+                var warp = active.WarpGates[warpIndex];
                 if (warp.DestinationFieldId == field.Definition.Id
                     && Vector2.DistanceSquared(player, WorldSpace.Planar(warp.X, warp.Z)) < disconnect * disconnect)
                 {
@@ -245,8 +251,9 @@ public sealed partial class GameScene
                 var seamDistance = TryGateSeam(active, field.Definition, out var traceSeam)
                     ? Vector2.Distance(player, traceSeam) : -1f;
                 var nearestWarpDistance = float.MaxValue;
-                foreach (var warp in active.WarpGates)
+                for (var warpIndex = 0; warpIndex < active.WarpGates.Count; warpIndex++)
                 {
+                    var warp = active.WarpGates[warpIndex];
                     if (warp.DestinationFieldId == field.Definition.Id)
                     {
                         nearestWarpDistance = MathF.Min(nearestWarpDistance,

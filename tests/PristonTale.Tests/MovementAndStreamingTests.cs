@@ -4,6 +4,7 @@ using PristonTale.Gameplay.World;
 using PristonTale.Gameplay.World.Streaming;
 using PristonTale.Simulation.Characters;
 using PristonTale.Simulation.World.Fields;
+using PristonTale.Simulation.World;
 using PristonTale.Contracts.Motion;
 using PristonTale.Contracts.Characters;
 
@@ -17,6 +18,7 @@ internal static class MovementAndStreamingTests
         yield return ("reports beyond run speed or during busy actions keep the authoritative position", BlockedArrivalAsync);
         yield return ("a game master may dash at the original's debug speed, a player may not", GameMasterDashAsync);
         yield return ("streaming follows the movement destination without loading a distant adjacent field while idle", PrefetchAsync);
+        yield return ("scene allocations: streaming neighbour cache preserves order and refreshes on field changes", NeighbourCacheAsync);
         yield return ("NPC approach stops locally before authority confirms interaction range", NpcApproachAsync);
         yield return ("continuous gates keep reported running while warps reject stale positions", GateMovementAsync);
     }
@@ -94,6 +96,37 @@ internal static class MovementAndStreamingTests
             "large drift during a swing was not corrected");
         player.ExpireStaleMotion(10_000);
         Assert.True(player.MoveState == MotionState.Attack, "stale-motion expiry overrode a busy action");
+        return Task.CompletedTask;
+    }
+
+    private static Task NeighbourCacheAsync()
+    {
+        var catalog = new WorldCatalog();
+        var forest = catalog.GetField("fore-1");
+        var town = catalog.GetField("village-2");
+        var cache = new FieldNeighbourCache();
+        var expected = catalog.Neighbours(forest);
+        var actual = cache.Get(catalog, forest);
+        Assert.True(expected.Count > 0 && actual.SequenceEqual(expected), "neighbour order or content changed");
+        for (var index = 0; index < 1000; index++)
+        {
+            _ = cache.Get(catalog, forest);
+        }
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var same = true;
+        for (var index = 0; index < 1000; index++)
+        {
+            same &= ReferenceEquals(actual, cache.Get(catalog, forest));
+        }
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(same && allocated == 0, $"cached neighbour scans allocated {allocated} bytes or rebuilt their list");
+        Assert.True(cache.Get(catalog, town).SequenceEqual(catalog.Neighbours(town)), "town neighbours were stale");
+        Assert.True(cache.Get(catalog, forest).SequenceEqual(expected), "returning to forest kept town neighbours");
+        var other = new WorldCatalog();
+        var oldList = cache.Get(catalog, forest);
+        Assert.True(!ReferenceEquals(oldList, cache.Get(other, forest)), "catalog change did not invalidate the cache");
         return Task.CompletedTask;
     }
 

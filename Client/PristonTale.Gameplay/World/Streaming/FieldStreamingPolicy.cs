@@ -1,6 +1,27 @@
 using Microsoft.Xna.Framework;
+using PristonTale.Simulation.World;
 
 namespace PristonTale.Gameplay.World.Streaming;
+
+// Field definitions and their gate lists are fixed for the lifetime of a scene's catalog.
+internal sealed class FieldNeighbourCache
+{
+    private WorldCatalog _catalog;
+    private FieldDef _field;
+    private IReadOnlyList<FieldDef> _neighbours = [];
+
+    public IReadOnlyList<FieldDef> Get(WorldCatalog catalog, FieldDef field)
+    {
+        if (!ReferenceEquals(_catalog, catalog) || !ReferenceEquals(_field, field))
+        {
+            _neighbours = catalog.Neighbours(field);
+            _catalog = catalog;
+            _field = field;
+        }
+
+        return _neighbours;
+    }
+}
 
 internal static class FieldStreamingPolicy
 {
