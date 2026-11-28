@@ -8,10 +8,43 @@ internal static class AnimationFallbackTests
 {
     public static IEnumerable<(string, Func<Task>)> Cases()
     {
+        yield return ("render optimizations: motion end uses clip or allocation-free skeleton fallback", MotionEndAsync);
         yield return ("position-only animation preserves authored rotation and child orientation", RotationFallbackAsync);
         yield return ("animation segment caches preserve forward playback, loops and clip jumps", SegmentCacheAsync);
         yield return ("a merged skeleton samples only the motion range holding the frame and keeps the bind pose without one", MotionRangeAsync);
         yield return ("a rotation key past the playing motion's end holds the key before it", RotationEndAsync);
+    }
+
+    private static Task MotionEndAsync()
+    {
+        PristonModelObject Bone(string name, int last) => new(name, "", false, Matrix.Identity, Vector3.Zero,
+            [], [], [], [], [], [new(0, Vector3.Zero), new(last, Vector3.One)], [], [], [], [], []);
+        var objects = new List<PristonModelObject> { Bone("a", 800), Bone("b", 1600), Bone("c", 400) };
+        var model = new PristonModel("fixture", [], objects, [], default);
+        var motion = new PristonMotionInfo(0, 1, 3, [], 0, 0, 0, 1, 0, 0);
+        var fallback = motion with { EndFrame = motion.StartFrame };
+        var empty = model with { Objects = [] };
+        var copied = model with { Objects = new List<PristonModelObject> { Bone("other", 2400) } };
+        Assert.True(empty.LastFrame == 0 && model.LastFrame == 1600 && copied.LastFrame == 2400, "model end differs");
+        var explicitEnd = 3 * PristonTale.Contracts.Units.GameUnits.FrameTicks;
+        Assert.True(PristonRenderer.MotionEndTicks(motion, empty) == explicitEnd, "clip end was replaced by model end");
+        Assert.True(PristonRenderer.MotionEndTicks(fallback, model) == 1600, "fallback lost the longest bone");
+        for (var i = 0; i < 2000; i++)
+        {
+            _ = PristonRenderer.MotionEndTicks(motion, model);
+            _ = PristonRenderer.MotionEndTicks(fallback, model);
+        }
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var sum = 0;
+        for (var i = 0; i < 2000; i++)
+        {
+            sum += PristonRenderer.MotionEndTicks(motion, model) + PristonRenderer.MotionEndTicks(fallback, model);
+        }
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(sum == 2000 * (explicitEnd + 1600) && allocated == 0, $"motion end allocated {allocated} bytes or changed");
+        return Task.CompletedTask;
     }
 
     private static Task MotionRangeAsync()

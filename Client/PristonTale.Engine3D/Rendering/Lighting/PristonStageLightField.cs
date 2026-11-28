@@ -79,11 +79,12 @@ internal sealed class PristonStageLightField
             }
 
             floors.Add((face.A, face.B, face.C));
-            foreach (var p in new[] { a, b, c })
-            {
-                min = Vector2.Min(min, new Vector2(p.X, p.Z));
-                max = Vector2.Max(max, new Vector2(p.X, p.Z));
-            }
+            min = Vector2.Min(min, new Vector2(a.X, a.Z));
+            min = Vector2.Min(min, new Vector2(b.X, b.Z));
+            min = Vector2.Min(min, new Vector2(c.X, c.Z));
+            max = Vector2.Max(max, new Vector2(a.X, a.Z));
+            max = Vector2.Max(max, new Vector2(b.X, b.Z));
+            max = Vector2.Max(max, new Vector2(c.X, c.Z));
         }
 
         if (floors.Count == 0)

@@ -2,6 +2,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using PristonTale.Engine3D.Formats;
 using PristonTale.Engine3D.Rendering;
+using PristonTale.Engine3D.Rendering.Lighting;
 using PristonTale.GltfExport;
 
 namespace PristonTale.Tests;
@@ -12,6 +13,7 @@ internal static class RenderTests
     {
         yield return ("unused material catalogs do not enter streaming texture preparation", MaterialUsageAsync);
         yield return ("off-camera geometry remains eligible to cast shadows", ShadowAsync);
+        yield return ("render optimizations: floor light bounds include separated faces", FloorLightBoundsAsync);
         yield return ("static mesh preparation computes topology and normals without a GPU", MeshAsync);
         yield return ("stage normals are smoothed across materials and faces sharing a position, not across a wall", StageNormalsAsync);
         yield return ("a stage face that is never drawn does not bend the drawn ground's normals", HiddenStageNormalsAsync);
@@ -94,6 +96,30 @@ internal static class RenderTests
         Assert.True(builder.Queue.ShadowCasters.Count == 1, "aggregate duplicated or lost the covered shadow caster");
         builder.Build([batch], [aggregate], frame, includeShadowCasters: false);
         Assert.True(builder.Queue.ShadowCasters.Count == 0, "shadow queue was rebuilt on a frame that reuses the previous maps");
+        var visible = new RenderBatch([], [], null!, material, ForceCastsShadow: true, IsSkinned: true,
+            SkinnedBounds: new BoundingBox(new Vector3(-0.1f, -0.1f, 0.2f), new Vector3(0.1f, 0.1f, 0.8f)));
+        var outside = new RenderBatch([], [], null!, material, ForceCastsShadow: true, IsSkinned: true,
+            SkinnedBounds: new BoundingBox(new Vector3(50f), new Vector3(60f)));
+        Assert.True(builder.Build([outside, visible], [], frame) == 1 && builder.Queue.Count == 1
+            && builder.Queue.ShadowCasters.Count == 2 && ReferenceEquals(builder.Queue.ShadowCasters[0].Batch, visible)
+            && ReferenceEquals(builder.Queue.ShadowCasters[1].Batch, outside), "visibility changed the sorted shadow queue");
+        Assert.True(builder.Build([outside, visible], [], frame, includeShadowCasters: false) == 1
+            && builder.Queue.Count == 1 && builder.Queue.ShadowCasters.Count == 0, "colour-only culling lost a visible batch");
+        return Task.CompletedTask;
+    }
+
+    private static Task FloorLightBoundsAsync()
+    {
+        var stage = new PristonStage("fixture.smd", [],
+            [new(new Vector3(-300, 0, -300), Color.White), new(new Vector3(-100, 0, -300), Color.White), new(new Vector3(-300, 0, -100), Color.White),
+             new(new Vector3(300, 0, 300), Color.Black), new(new Vector3(500, 0, 300), Color.Black), new(new Vector3(300, 0, 500), Color.Black)],
+            [new(0, 1, 2, -1, -1), new(3, 4, 5, -1, -1)], [], [], default);
+        var field = PristonStageLightField.Build(stage);
+        Assert.True(field.TryLightAt(new Vector3(-250, 0, -250), out var bright), "negative grid coordinates were lost");
+        Assert.True(field.TryLightAt(new Vector3(350, 0, 350), out var dark), "positive grid coordinates were lost");
+        Assert.Near(1f, bright, 0.0001f);
+        Assert.Near(0f, dark, 0.0001f);
+        Assert.True(!field.TryLightAt(Vector3.Zero, out _), "a gap between the floors gained a light sample");
         return Task.CompletedTask;
     }
 

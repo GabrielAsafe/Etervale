@@ -404,7 +404,25 @@ public sealed record PristonModel(
     public PristonMaterialGroupMetadata MaterialGroup { get; init; }
     public PristonSourceTrailerMetadata SourceTrailer { get; init; }
     public bool IsAnimated => Objects.Any(o => o.IsAnimated);
-    public int LastFrame => Objects.Count == 0 ? 0 : Objects.Max(o => o.LastFrame);
+    public int LastFrame
+    {
+        get
+        {
+            var count = Objects.Count;
+            if (count == 0)
+            {
+                return 0;
+            }
+
+            var last = Objects[0].LastFrame;
+            for (var index = 1; index < count; index++)
+            {
+                last = Math.Max(last, Objects[index].LastFrame);
+            }
+
+            return last;
+        }
+    }
 
     // A bone or object is found by name, case-insensitively; the first object of a name wins.
     public int ObjectIndex(string name)

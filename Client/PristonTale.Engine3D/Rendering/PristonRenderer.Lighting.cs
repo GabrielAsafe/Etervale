@@ -128,23 +128,43 @@ public sealed partial class PristonRenderer
         return new PristonLighting(ambient, sun, _activeLights, transientCount, ground);
     }
 
+    private PristonTileLights CullLocalLights(in PristonFrameContext frame, Texture2D linearDepth)
+    {
+        H700EnsureLightCulling();
+        Profiler.Begin(RenderSection.LightCulling);
+        var near = PristonDepth.NearPlane(frame.Projection);
+        var far = PristonDepth.FarPlane(frame.Projection);
+        var tiles = _lightCulling.Run(frame.Lighting.PointLights, frame.View, frame.Projection, near, far, _sceneTargets.Width,
+            _sceneTargets.Height, linearDepth, _textureLoader.White);
+        Profiler.End(RenderSection.LightCulling);
+        return tiles;
+    }
+
     private void SelectActiveLights(Vector3 focusPoint, float lampFactor)
     {
         if (!PristonDayNightCycle.LampsLit(lampFactor))
             return;
 
         _tunedCandidates.Clear();
-        foreach (var stage in _stages)
-            foreach (var light in stage.StageLights)
-                _tunedCandidates.Add(TuneLight(light, stage, lampFactor));
-
-        if (_tunedCandidates.Count == 0)
-            return;
-
         // Transient lights already hold the first slots; the lamps share the rest of the limit.
         var limit = Math.Max(_maxLocalLights - _activeLights.Count, 0);
         if (limit == 0)
+        {
             return;
+        }
+
+        foreach (var stage in _stages)
+        {
+            foreach (var light in stage.StageLights)
+            {
+                _tunedCandidates.Add(TuneLight(light, stage, lampFactor));
+            }
+        }
+
+        if (_tunedCandidates.Count == 0)
+        {
+            return;
+        }
 
         if (_tunedCandidates.Count <= limit)
         {

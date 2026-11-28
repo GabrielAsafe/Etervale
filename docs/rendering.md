@@ -189,13 +189,13 @@ checks.
 | 7 | `Sky` | always | Dome layers into the sky target (display-referred sRGB codes), then `SkyComposite` fills every scene target. |
 | 8 | `Prepass` | no MSAA, not `Overdraw`; preference on, TAA, development view or configured depth effect | Depth, linear depth, normals (smoothness in alpha), motion of opaque surfaces and cut-outs. |
 | 9 | `AmbientOcclusion` | pre-pass ran and AO or contact shadows on | GTAO and contact shadows at half resolution, blur. |
-| 10 | `LightCulling` | any local light | 16x16 tile masks (depth-bounded after the pre-pass). |
+| 10 | `LightCulling` | any local light | 16x16 tile masks; depth-bounded after the pre-pass, otherwise before `Sky` and the HDR fill. |
 | - | (outline) | an actor with `SetActorOutline` | `DrawOutlines`: the actor flat in one colour, shifted 1.4 px scaled by the screen height over 600 (times the outline strength) in four directions, pushed back 16 units and writing depth, so the lit actor covers it and only a rim stays. |
 | 11 | `Opaque`, `Masked` | always | Lit pass; after the pre-pass it tests its surfaces for equal depth without writing it (cut-out texels the pre-pass discarded fail before shading). Without the pre-pass, TAA motion is written here. |
 | 12 | `Reflections` | pre-pass, SSR on, a surface with roughness < 0.3 seen | Scene copy and screen-space reflections. |
 | 13 | `Transparent` | always | Blended queue, back to front. |
 | - | (calibration) | `calibrationSpheres` | Grey and chrome sphere through the lit pass. |
-| 14 | `Glow` | always | Coronas of glow lights and glow-emitter props, scaled by the lamp factor. |
+| 14 | `Glow` | lamps lit | Gather and draw coronas of glow lights and glow-emitter props, scaled by the lamp factor. |
 | 15 | `Volumetric` | pre-pass, volumetric on, sun shadows on, sun up | March, accumulate, composite over the scene. |
 | - | effects | caller | Rain (`PristonRain`), then particles, VFX, mesh effects into the bound HDR scene. |
 | 16 | `Temporal` | TAA | Resolve into history (`ComposeScene`). |
@@ -208,6 +208,15 @@ Mode switches: `Taa` and `Msaa` are exclusive; MSAA (2-4 samples) disables the p
 shadows, SSR, volumetric light, soft particles and depth-bounded tiles. `Overdraw` disables TAA, the pre-pass, the sky
 and IBL and draws everything additive. `Underground` removes sun, sky dome and shadows and lights with a fixed ambient
 and lamps at full.
+
+Without a depth pre-pass, local light culling dispatches before the sky and HDR fill; the tile masks are applied to
+world surfaces after the sky. This avoids interrupting the filled HDR target for compute. With a pre-pass the dispatch
+still reads its linear depth. The HDR colour format, depth, light budget and shader calculations are unchanged.
+`HdrToDisplay` therefore excludes early light culling; `SceneTotal` includes it. The Glow CPU interval includes its
+source gathering, which is skipped when lamps are off. Lamp selection does not scan stage lights when transient lights
+already fill the budget. Queue construction computes sort keys and distances only for visible batches or shadow casters.
+Actor motion end ticks use the clip's end when present, otherwise the skeleton's indexed last-frame scan. Building the
+stage floor-light grid accumulates bounds without allocating a temporary corner array per face.
 
 ## Render targets
 

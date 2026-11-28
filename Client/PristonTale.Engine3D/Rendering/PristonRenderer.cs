@@ -629,6 +629,9 @@ public sealed partial class PristonRenderer : IDisposable
 
     public Point SceneRenderSize => new(_sceneTargets.Width, _sceneTargets.Height);
 
+    internal static int MotionEndTicks(PristonMotionInfo motion, PristonModel skeleton) =>
+        motion.EndFrame > motion.StartFrame ? (int)motion.EndFrame * GameUnits.FrameTicks : skeleton.LastFrame;
+
     internal static bool ShouldUseDepthPrepass(bool supported, bool skipOptional, bool temporal, bool needsDepth) =>
         supported && (!skipOptional || temporal || needsDepth);
 
@@ -807,6 +810,10 @@ public sealed partial class PristonRenderer : IDisposable
             frame = frame with { Environment = new PristonEnvironmentFrame(null, null, _environment?.BrdfLut ?? _textureLoader.White) };
         }
 
+        var cullLights = lighting.PointLights.Count > 0 && !_h700Lite;
+        var cullBeforeHdr = cullLights && !_sceneTargets.Prepass;
+        var earlyTiles = cullBeforeHdr ? CullLocalLights(frame, null) : default;
+
         Profiler.Begin(RenderSection.Sky);
         if (skyVisible)
         {
@@ -837,6 +844,11 @@ public sealed partial class PristonRenderer : IDisposable
 
         _stateCache.InvalidateDeviceState();
         _stateCache.SetDepthStencilState(PristonDepth.Write);
+        if (cullBeforeHdr)
+        {
+            frame = frame with { Tiles = earlyTiles };
+        }
+
         _shaders.ApplyFrame(frame);
         _prepassDrawn = false;
         if (_sceneTargets.Prepass)
@@ -869,16 +881,9 @@ public sealed partial class PristonRenderer : IDisposable
             _prepassDrawn = true;
         }
 
-        if (lighting.PointLights.Count > 0 && !_h700Lite)
+        if (cullLights && !cullBeforeHdr)
         {
-            H700EnsureLightCulling();
-            Profiler.Begin(RenderSection.LightCulling);
-            var near = PristonDepth.NearPlane(frame.Projection);
-            var far = PristonDepth.FarPlane(frame.Projection);
-            var tiles = _lightCulling.Run(lighting.PointLights, frame.View, frame.Projection, near, far, _sceneTargets.Width,
-                _sceneTargets.Height, _prepassDrawn ? _sceneTargets.LinearDepth : null, _textureLoader.White);
-            Profiler.End(RenderSection.LightCulling);
-            frame = frame with { Tiles = tiles };
+            frame = frame with { Tiles = CullLocalLights(frame, _prepassDrawn ? _sceneTargets.LinearDepth : null) };
             _shaders.ApplyFrame(frame);
             _sceneTargets.Bind();
             _stateCache.InvalidateDeviceState();
@@ -909,24 +914,27 @@ public sealed partial class PristonRenderer : IDisposable
         }
 
         _frameGlowLights.Clear();
-        foreach (var stage in _stages)
+        Profiler.Begin(RenderSection.Glow);
+        if (_glowRenderer is not null && PristonDayNightCycle.LampsLit(_lampFactor))
         {
-            _frameGlowLights.AddRange(stage.GlowLights);
-            foreach (var prop in stage.AnimatedModels)
+            foreach (var stage in _stages)
             {
-                if (prop.IsGlowEmitter)
+                _frameGlowLights.AddRange(stage.GlowLights);
+                foreach (var prop in stage.AnimatedModels)
                 {
-                    _frameGlowLights.Add(new PristonPointLight(
-                        prop.WorldCenter(),
-                        EmitterGlowRadius * stage.GlowScale,
-                        prop.GlowColor,
-                        stage.GlowIntensity));
+                    if (prop.IsGlowEmitter)
+                    {
+                        _frameGlowLights.Add(new PristonPointLight(
+                            prop.WorldCenter(),
+                            EmitterGlowRadius * stage.GlowScale,
+                            prop.GlowColor,
+                            stage.GlowIntensity));
+                    }
                 }
             }
-        }
 
-        Profiler.Begin(RenderSection.Glow);
-        _glowRenderer?.Draw(frame, _frameGlowLights, _lampFactor);
+            _glowRenderer.Draw(frame, _frameGlowLights, _lampFactor);
+        }
         Profiler.End(RenderSection.Glow);
         // Shafts of the sun only: the moon's are too faint to pay for.
         if (_prepassDrawn && _volumetricLight && sunShadowsEnabled && SunLights)
@@ -1318,14 +1326,14 @@ public sealed partial class PristonRenderer : IDisposable
         public void SeekMotion(int framesFromStart)
         {
             var start = StartTicks(Motion);
-            var end = EndTicks(Motion, Instance.Actor.Skeleton.LastFrame);
+            var end = MotionEndTicks(Motion, Instance.Actor.Skeleton);
             Frame = Math.Clamp(start + framesFromStart * GameUnits.FrameTicks, start, Math.Max(start, end));
         }
 
         public void Advance(float deltaSeconds)
         {
             var start = StartTicks(Motion);
-            var end = EndTicks(Motion, Instance.Actor.Skeleton.LastFrame);
+            var end = MotionEndTicks(Motion, Instance.Actor.Skeleton);
             if (end <= start)
             {
                 Frame = start;
@@ -1358,14 +1366,11 @@ public sealed partial class PristonRenderer : IDisposable
         public void SetFrame(float ticks)
         {
             var start = StartTicks(Motion);
-            var end = EndTicks(Motion, Instance.Actor.Skeleton.LastFrame);
+            var end = MotionEndTicks(Motion, Instance.Actor.Skeleton);
             Frame = end > start ? MathHelper.Clamp(ticks, start, end - 1) : start;
         }
 
         private static int StartTicks(PristonMotionInfo motion) => (int)motion.StartFrame * GameUnits.FrameTicks;
-
-        private static int EndTicks(PristonMotionInfo motion, int fallback) =>
-            motion.EndFrame > motion.StartFrame ? (int)motion.EndFrame * GameUnits.FrameTicks : fallback;
 
         // Only one-shots driven by gameplay return to Stand; unlisted motions hold their final pose.
         private static bool ReturnsToStand(PristonMotionInfo motion)

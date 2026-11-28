@@ -34,21 +34,29 @@ internal sealed class RenderQueueBuilder
                 continue;
             }
 
+            var visible = _frustum.Intersects(batch.Bounds);
+            var shadowCaster = includeShadowCasters && CastsShadow(batch);
+            if (!visible)
+            {
+                culled++;
+                if (!shadowCaster)
+                {
+                    continue;
+                }
+            }
+
             var sortKey = batch.Material.SortKey;
             var sortDepth = SortDepth(frame.CameraPosition, batch.Bounds);
-            if (includeShadowCasters && CastsShadow(batch))
+            if (shadowCaster)
             {
                 _queue.AddShadowCaster(batch, sortKey, sortDepth);
             }
 
-            if (!_frustum.Intersects(batch.Bounds))
+            if (visible)
             {
-                culled++;
-                continue;
+                var pass = RenderPass(batch);
+                _queue.Add(batch, pass, sortKey, sortDepth);
             }
-
-            var pass = RenderPass(batch);
-            _queue.Add(batch, pass, sortKey, sortDepth);
         }
 
         if (includeShadowCasters)
